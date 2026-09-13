@@ -1,0 +1,18 @@
+{
+  "_note": "Dummy pricing (price_paise) — real pricing to be decided later. Stock is a starting dummy quantity for each brand; seed.js never overwrites stock_mg on re-run, only name/type/threshold/active/sort_order.",
+  "brands": [
+    { "id": "muscleblaze", "name": "MuscleBlaze", "protein_type": "whey", "sort_order": 1, "initial_stock_mg": 3000000, "low_stock_threshold_mg": 300000 },
+    { "id": "gnc", "name": "GNC", "protein_type": "whey", "sort_order": 2, "initial_stock_mg": 3000000, "low_stock_threshold_mg": 300000 },
+    { "id": "on", "name": "ON (Optimum Nutrition)", "protein_type": "whey", "sort_order": 3, "initial_stock_mg": 3000000, "low_stock_threshold_mg": 300000 },
+    { "id": "superyou", "name": "Super You", "protein_type": "yeast", "sort_order": 4, "initial_stock_mg": 2000000, "low_stock_threshold_mg": 200000 },
+    { "id": "origin", "name": "Origin", "protein_type": "plant", "sort_order": 5, "initial_stock_mg": 2000000, "low_stock_threshold_mg": 200000 }
+  ],
+  "amount_options": [
+    { "grams": 20, "powder_mg": 15000, "price_paise": 0 },
+    { "grams": 30, "powder_mg": 22500, "price_paise": 3000 },
+    { "grams": 40, "powder_mg": 30000, "price_paise": 6000 },
+    { "grams": 50, "powder_mg": 37500, "price_paise": 9000 }
+  ],
+  "default_brand_id": "muscleblaze",
+  "default_grams": 20
+}

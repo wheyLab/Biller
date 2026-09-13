@@ -1,0 +1,39 @@
+{
+  "_note": "Menu is NOT finalised (spec section 8). Confirmed items are available; undeveloped/conflicting items are seeded unavailable with no invented price. Tier prices are fixed per tier. Items marked assumed_tier have a confirmed name but the tier still needs owner sign-off.",
+  "tiers": {
+    "Caffeinated": 11900,
+    "Originals": 12900,
+    "Daily": 14900,
+    "Signature": 17900,
+    "Clear Whey": null
+  },
+  "items": [
+    { "id": "WL-01", "name": "Date & Avocado Whey", "tier": "Daily", "price_paise": 14900, "sort_order": 1, "is_available": true },
+    { "id": "WL-02", "name": "Signature Tropical", "tier": "Signature", "price_paise": 17900, "sort_order": 2, "is_available": true },
+    { "id": "WL-03", "name": "Dragon Fruit", "tier": "Daily", "price_paise": 14900, "sort_order": 3, "is_available": true, "assumed_tier": true },
+    { "id": "WL-04", "name": "Apple & Cinnamon", "tier": "Daily", "price_paise": 14900, "sort_order": 4, "is_available": true, "assumed_tier": true },
+    { "id": "WL-05", "name": "The Hulk", "tier": "Signature", "price_paise": 17900, "sort_order": 5, "is_available": true, "assumed_tier": true },
+    { "id": "WL-06", "name": "Red Rush", "tier": "Signature", "price_paise": 17900, "sort_order": 6, "is_available": true, "assumed_tier": true },
+    { "id": "WL-07", "name": "Classic Chocolate", "tier": "Originals", "price_paise": null, "sort_order": 7, "is_available": false, "note": "No recipe or confirmed price." },
+    { "id": "WL-08", "name": "Berry Blast", "tier": null, "price_paise": null, "sort_order": 8, "is_available": false, "note": "Costs out at 199 which matches no tier; tier or price must move." },
+    { "id": "WL-09", "name": "Peanut Butter & Banana", "tier": null, "price_paise": null, "sort_order": 9, "is_available": false, "note": "Undeveloped." },
+    { "id": "WL-10", "name": "Cold Brew Whey", "tier": "Caffeinated", "price_paise": null, "sort_order": 10, "is_available": false, "note": "Undeveloped." },
+    { "id": "WL-11", "name": "Mocha Whey", "tier": "Caffeinated", "price_paise": null, "sort_order": 11, "is_available": false, "note": "Undeveloped." },
+    { "id": "WL-12", "name": "Mango & Papaya", "tier": null, "price_paise": null, "sort_order": 12, "is_available": false, "note": "Appears to duplicate Signature Tropical; confirm before use." },
+    { "id": "WL-13", "name": "Clear Whey — TBD 1", "tier": "Clear Whey", "price_paise": null, "sort_order": 13, "is_available": false, "note": "No recipe, no price." },
+    { "id": "WL-14", "name": "Clear Whey — TBD 2", "tier": "Clear Whey", "price_paise": null, "sort_order": 14, "is_available": false, "note": "No recipe, no price." },
+    { "id": "WL-15", "name": "Caffeinated — TBD", "tier": "Caffeinated", "price_paise": null, "sort_order": 15, "is_available": false, "note": "Open slot placeholder." },
+    { "id": "WL-16", "name": "Originals — TBD", "tier": "Originals", "price_paise": null, "sort_order": 16, "is_available": false, "note": "Open slot placeholder." }
+  ],
+  "config": {
+    "gst.mode": "exclusive",
+    "gst.rate_bps": "500",
+    "loyalty.earn_paise_per_point": "1000",
+    "loyalty.redeem_threshold_points": "150",
+    "loyalty.redeem_eligible_tiers": "Caffeinated,Originals,Daily",
+    "loyalty.max_redemptions_per_order": "1",
+    "business.name": "Whey Lab",
+    "business.address": "Tavarekere, Madiwala, Bengaluru 560029",
+    "business.gstin": "REPLACE_WITH_GSTIN"
+  }
+}

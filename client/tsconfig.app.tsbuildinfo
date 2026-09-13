@@ -1,0 +1,1 @@
+{"root":["./src/App.tsx","./src/api.ts","./src/main.tsx","./src/money.ts","./src/components/AdminApp.tsx","./src/components/BillModal.tsx","./src/components/BillingApp.tsx","./src/components/MenuGrid.tsx","./src/components/TicketRail.tsx","./src/components/Wordmark.tsx","./src/store/ticket.ts"],"version":"5.8.3"}
