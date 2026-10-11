@@ -1,0 +1,14 @@
+node_modules/
+dist/
+*.log
+# DB lives outside the repo, but ignore any stray local copies
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+.DS_Store
+
+# `npm run backup` (backup-snapshot.cmd) writes dated-range snapshots into
+# backups/ on purpose — you review and `git push` them yourself. They contain
+# real customer data (phone numbers, names); see README's Data & backup section
+# before pushing if you're not already sure this repo should hold that.
+!backups/*.sqlite

@@ -1,8 +1,22 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { MenuItem, CustomerLookup, CustomerIdentity, OrderResult, ProteinBrand, ProteinAmountOption } from '../api';
+import type {
+  MenuItem,
+  CustomerLookup,
+  CustomerIdentity,
+  OrderResult,
+  ProteinBrand,
+  ProteinAmountOption,
+  ProteinBrandPrice,
+  AddonOption,
+  MilkOption,
+  ProteinMode,
+} from '../api';
 import { api, rupees } from '../api';
 import type { TicketLine } from '../store/ticket';
 import { orderTotals } from '../money';
+import { pickUpiQr } from '../upi';
+import { UpiQrModal } from './UpiQrModal';
+import { CREATINE_EXCLUDED_TIER, CREATINE_ADDON_ID, NO_MILK_TIER, ADDON_NOTES } from '../proteinRules';
 
 type Payment = 'cash' | 'upi' | 'card';
 const TYPE_LABEL: Record<string, string> = { whey: 'Whey', yeast: 'Yeast', plant: 'Plant-based' };
@@ -16,11 +30,21 @@ export function TicketRail({
   customer,
   proteinBrands,
   proteinOptions,
+  brandPrices,
+  addonOptions,
+  milkOptions,
+  modeByTier,
   onAdd,
   onDec,
   onRemove,
   onSetProtein,
+  onToggleAddon,
+  onSetMilk,
   onComplete,
+  stage,
+  className = '',
+  onCheckout,
+  onClear,
 }: {
   items: MenuItem[];
   lines: Record<string, TicketLine>;
@@ -28,26 +52,72 @@ export function TicketRail({
   customer: CustomerLookup | null;
   proteinBrands: ProteinBrand[];
   proteinOptions: ProteinAmountOption[];
+  brandPrices: ProteinBrandPrice[];
+  addonOptions: AddonOption[];
+  milkOptions: MilkOption[];
+  modeByTier: Record<string, ProteinMode>;
   onAdd: (id: string) => void;
   onDec: (id: string) => void;
   onRemove: (id: string) => void;
   onSetProtein: (id: string, brandId: string, grams: number) => void;
+  onToggleAddon: (id: string, addonId: string) => void;
+  onSetMilk: (id: string, milkId: string) => void;
   onComplete: (r: OrderResult) => void;
+  // 'cart': the slide-in cart on the menu (items + totals, then Checkout).
+  // 'pay': the final step once the customer is chosen (redeem, payment, complete).
+  stage: 'cart' | 'pay';
+  className?: string;
+  onCheckout?: () => void;
+  onClear?: () => void;
 }) {
   const byId = useMemo(() => new Map(items.map((i) => [i.id, i])), [items]);
   const brandsById = useMemo(() => new Map(proteinBrands.map((b) => [b.id, b])), [proteinBrands]);
   const optionsByGrams = useMemo(() => new Map(proteinOptions.map((o) => [o.grams, o])), [proteinOptions]);
+  const brandPriceMap = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const bp of brandPrices) m.set(`${bp.brand_id}:${bp.grams}`, bp.price_paise);
+    return m;
+  }, [brandPrices]);
+  const addonsById = useMemo(() => new Map(addonOptions.map((a) => [a.id, a])), [addonOptions]);
+  const milkById = useMemo(() => new Map(milkOptions.map((m) => [m.id, m])), [milkOptions]);
   const [payment, setPayment] = useState<Payment>('cash');
+  // Which QR code this order shows; chosen at random on first use, then kept.
+  const [upiQr, setUpiQr] = useState<ReturnType<typeof pickUpiQr> | null>(null);
+  const [upiOpen, setUpiOpen] = useState(false);
   const [redeem, setRedeem] = useState(false);
+  const [tenPercentOff, setTenPercentOff] = useState(false);
   const [manualDiscount, setManualDiscount] = useState(0);
   const [manualOpen, setManualOpen] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
   const lineList = Object.entries(lines).map(([id, line]) => {
-    const addon = optionsByGrams.get(line.proteinGrams)?.price_paise ?? 0;
-    return { id, item: byId.get(id)!, line, addonPaise: addon, unitPaise: (byId.get(id)?.price_paise || 0) + addon };
+    const item = byId.get(id)!;
+    const mode: ProteinMode = (item && modeByTier[item.tier || '']) || 'none';
+    const proteinAddonPaise =
+      mode === 'brand'
+        ? brandPriceMap.get(`${line.proteinBrandId}:${line.proteinGrams}`) ?? 0
+        : mode === 'amount'
+        ? optionsByGrams.get(line.proteinGrams)?.signature_addon_price_paise ?? 0
+        : 0;
+    const addons = line.addonIds.map((a) => addonsById.get(a)).filter((a): a is AddonOption => !!a);
+    const addonsPaise = addons.reduce((s, a) => s + a.price_paise, 0);
+    const showMilk = item?.tier !== NO_MILK_TIER;
+    const milk = showMilk ? milkById.get(line.milkId) ?? null : null;
+    const milkPaise = milk?.price_paise ?? 0;
+    return {
+      id,
+      item,
+      line,
+      mode,
+      proteinAddonPaise,
+      addons,
+      showMilk,
+      milk,
+      unitPaise: (item?.price_paise || 0) + proteinAddonPaise + addonsPaise + milkPaise,
+    };
   });
+  const itemCount = lineList.reduce((n, l) => n + l.line.quantity, 0);
   const subtotal = lineList.reduce((s, l) => s + l.unitPaise * l.line.quantity, 0);
 
   const eligibleTiers = customer?.eligible_tiers || [];
@@ -59,7 +129,8 @@ export function TicketRail({
 
   const canRedeem = !!customer?.can_redeem && !!redeemLine;
   const redemptionDiscount = redeem && canRedeem ? redeemLine!.unitPaise : 0;
-  const discount = redemptionDiscount + manualDiscount;
+  const tenPercentDiscount = tenPercentOff ? Math.round(subtotal * 0.1) : 0;
+  const discount = redemptionDiscount + tenPercentDiscount + manualDiscount;
   const totals = orderTotals(subtotal, discount);
 
   // Undocumented manual-discount override: keyboard only, no visible button.
@@ -85,11 +156,15 @@ export function TicketRail({
           quantity: l.line.quantity,
           protein_brand_id: l.line.proteinBrandId,
           protein_grams: l.line.proteinGrams,
+          addon_ids: l.line.addonIds,
+          milk_id: l.showMilk ? l.line.milkId : undefined,
         })),
         payment_method: payment,
         phone: identity.phone || undefined,
         username: identity.username || undefined,
         redeem: redemptionDiscount > 0 ? { menu_item_id: redeemLine!.item.id } : undefined,
+        ten_percent_off: tenPercentOff || undefined,
+        manual_discount_paise: manualDiscount > 0 ? manualDiscount : undefined,
       });
       onComplete(result);
     } catch (e) {
@@ -100,22 +175,33 @@ export function TicketRail({
   }
 
   return (
-    <aside className="w-[380px] shrink-0 h-full flex flex-col bg-ink border-l-2 border-cream/15">
+    <aside className={`h-full flex flex-col bg-ink ${className}`}>
       <div className="px-4 py-3 border-b border-cream/10 flex items-baseline justify-between">
-        <span className="font-display text-xl text-cream">
-          {customer ? customer.first_name || 'Member' : 'Walk-in'}
-          {customer?.username && (
-            <span className="font-mono text-sm text-cream/50 ml-2">@{customer.username}</span>
-          )}
-        </span>
-        {customer && <span className="font-mono text-sm text-cream/60">{customer.points_balance} pts</span>}
+        {stage === 'cart' ? (
+          <>
+            <span className="font-display text-xl text-cream">Your order</span>
+            <span className="font-mono text-sm text-cream/60">
+              {itemCount} {itemCount === 1 ? 'item' : 'items'}
+            </span>
+          </>
+        ) : (
+          <>
+            <span className="font-display text-xl text-cream">
+              {customer ? customer.first_name || 'Member' : 'Walk-in'}
+              {customer?.username && (
+                <span className="font-mono text-sm text-cream/50 ml-2">@{customer.username}</span>
+              )}
+            </span>
+            {customer && <span className="font-mono text-sm text-cream/60">{customer.points_balance} pts</span>}
+          </>
+        )}
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4">
+      <div className="no-scrollbar flex-1 overflow-y-auto p-4">
         <h2 className="font-body uppercase tracking-widest text-xs text-cream/50 mb-3">Ticket</h2>
         {lineList.length === 0 && <p className="text-cream/40 font-body text-sm">No items yet.</p>}
         <ul className="flex flex-col gap-3">
-          {lineList.map(({ id, item, line, unitPaise }) => (
+          {lineList.map(({ id, item, line, mode, showMilk, unitPaise }) => (
             <li key={id} className="animate-land">
               <div className="flex items-center gap-2">
                 <div className="flex-1 min-w-0">
@@ -130,13 +216,23 @@ export function TicketRail({
                 <div className="w-20 text-right font-mono text-cream">{rupees(unitPaise * line.quantity)}</div>
                 <button onClick={() => onRemove(id)} className="text-red text-lg px-1" aria-label="remove">×</button>
               </div>
-              <ProteinPicker
+              <LineCustomizer
+                tier={item.tier}
+                mode={mode}
                 brands={proteinBrands}
                 options={proteinOptions}
+                brandPriceMap={brandPriceMap}
+                addonOptions={addonOptions}
+                milkOptions={milkOptions}
+                showMilk={showMilk}
                 brandName={brandsById.get(line.proteinBrandId)?.name || line.proteinBrandId}
                 selectedBrandId={line.proteinBrandId}
                 selectedGrams={line.proteinGrams}
-                onChange={(brandId, grams) => onSetProtein(id, brandId, grams)}
+                selectedAddonIds={line.addonIds}
+                selectedMilkId={line.milkId}
+                onChangeProtein={(brandId, grams) => onSetProtein(id, brandId, grams)}
+                onToggleAddon={(addonId) => onToggleAddon(id, addonId)}
+                onSetMilk={(milkId) => onSetMilk(id, milkId)}
               />
             </li>
           ))}
@@ -144,14 +240,21 @@ export function TicketRail({
       </div>
 
       <div className="p-4 border-t-2 border-cream/15 flex flex-col gap-3">
-        {canRedeem && (
+        {stage === 'pay' && canRedeem && (
           <label className="flex items-center gap-2 font-body text-sm text-cream cursor-pointer">
             <input type="checkbox" checked={redeem} onChange={(e) => setRedeem(e.target.checked)} />
             Redeem {customer!.redeem_threshold} pts — free {redeemLine!.item.name}
           </label>
         )}
 
-        {manualOpen && (
+        {stage === 'pay' && lineList.length > 0 && (
+          <label className="flex items-center gap-2 font-body text-sm text-cream cursor-pointer">
+            <input type="checkbox" checked={tenPercentOff} onChange={(e) => setTenPercentOff(e.target.checked)} />
+            10% off
+          </label>
+        )}
+
+        {stage === 'pay' && manualOpen && (
           <input
             inputMode="numeric"
             placeholder="Manual discount (paise)"
@@ -172,49 +275,97 @@ export function TicketRail({
           <span className="font-display text-4xl text-red">{rupees(totals.total_paise)}</span>
         </div>
 
-        <div className="grid grid-cols-3 gap-2">
+        {stage === 'cart' && (
+          <>
+            <button
+              onClick={onCheckout}
+              disabled={lineList.length === 0}
+              className="w-full py-4 bg-red text-cream font-display text-2xl tracking-wide disabled:opacity-40"
+            >
+              CHECKOUT
+            </button>
+            <button onClick={onClear} className="font-body text-xs text-cream/40 underline underline-offset-4">
+              Clear order
+            </button>
+          </>
+        )}
+
+        {stage === 'pay' && (<div className="grid grid-cols-3 gap-2">
           {(['cash', 'upi', 'card'] as Payment[]).map((m) => (
             <button
               key={m}
-              onClick={() => setPayment(m)}
+              onClick={() => {
+                setPayment(m);
+                if (m === 'upi' && lineList.length > 0) {
+                  setUpiQr((q) => q ?? pickUpiQr());
+                  setUpiOpen(true);
+                }
+              }}
               className={`py-2 font-body uppercase text-sm border-2 ${payment === m ? 'border-red bg-red text-cream' : 'border-cream/25 text-cream/70'}`}
             >
               {m}
             </button>
           ))}
-        </div>
+        </div>)}
 
-        {error && <p className="font-body text-sm text-red">{error}</p>}
+        {stage === 'pay' && error && <p className="font-body text-sm text-red">{error}</p>}
 
-        <button
-          onClick={complete}
-          disabled={busy || lineList.length === 0}
-          className="w-full py-4 bg-red text-cream font-display text-2xl tracking-wide disabled:opacity-40"
-        >
-          {busy ? 'SAVING…' : 'COMPLETE ORDER'}
-        </button>
+        {stage === 'pay' && (
+          <button
+            onClick={complete}
+            disabled={busy || lineList.length === 0}
+            className="w-full py-4 bg-red text-cream font-display text-2xl tracking-wide disabled:opacity-40"
+          >
+            {busy ? 'SAVING…' : 'COMPLETE ORDER'}
+          </button>
+        )}
       </div>
+      {upiOpen && upiQr && (
+        <UpiQrModal src={upiQr.src} amount={rupees(totals.total_paise)} onClose={() => setUpiOpen(false)} />
+      )}
     </aside>
   );
 }
 
-// Compact brand + grams picker under each ticket line. Collapsed by default
-// (shows the current choice as one line — usually the default, no interaction
-// needed); tap to expand and change it.
-function ProteinPicker({
+// One collapsible panel per ticket line covering everything that can be
+// customised for it: brand+grams (Originals/Lab Blend), grams-only
+// (Signature), add-ons (everywhere, creatine excluded on Bulk), and milk
+// (everywhere except Clear Protein). Collapsed by default, showing the
+// current choice as one summary line; tap to expand and change it.
+function LineCustomizer({
+  tier,
+  mode,
   brands,
   options,
+  brandPriceMap,
+  addonOptions,
+  milkOptions,
+  showMilk,
   brandName,
   selectedBrandId,
   selectedGrams,
-  onChange,
+  selectedAddonIds,
+  selectedMilkId,
+  onChangeProtein,
+  onToggleAddon,
+  onSetMilk,
 }: {
+  tier: string | null;
+  mode: ProteinMode;
   brands: ProteinBrand[];
   options: ProteinAmountOption[];
+  brandPriceMap: Map<string, number>;
+  addonOptions: AddonOption[];
+  milkOptions: MilkOption[];
+  showMilk: boolean;
   brandName: string;
   selectedBrandId: string;
   selectedGrams: number;
-  onChange: (brandId: string, grams: number) => void;
+  selectedAddonIds: string[];
+  selectedMilkId: string;
+  onChangeProtein: (brandId: string, grams: number) => void;
+  onToggleAddon: (addonId: string) => void;
+  onSetMilk: (milkId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const grouped = useMemo(() => {
@@ -223,54 +374,147 @@ function ProteinPicker({
     return g;
   }, [brands]);
 
+  const addonNames = addonOptions.filter((a) => selectedAddonIds.includes(a.id)).map((a) => a.name);
+  const milk = showMilk ? milkOptions.find((m) => m.id === selectedMilkId) : null;
+
+  const summaryParts: string[] = [];
+  if (mode === 'brand') summaryParts.push(`${brandName} ${selectedGrams}g`);
+  else if (mode === 'amount') summaryParts.push(`${selectedGrams}g protein`);
+  if (addonNames.length) summaryParts.push(addonNames.join(', '));
+  if (milk && milk.price_paise > 0) summaryParts.push(milk.name);
+  const summary = summaryParts.length ? summaryParts.join(' · ') : 'Customize';
+
+  const nothingToCustomize = mode === 'none' && addonOptions.length === 0 && !showMilk;
+  if (nothingToCustomize) return null;
+
   return (
     <div className="mt-1">
       <button
         onClick={() => setOpen((v) => !v)}
         className="font-mono text-xs text-cream/50 hover:text-cream/80"
       >
-        {brandName} · {selectedGrams}g protein {open ? '▴' : '▾'}
+        {summary} {open ? '▴' : '▾'}
       </button>
       {open && (
         <div className="mt-1.5 border border-cream/15 p-2 flex flex-col gap-2">
-          {Object.entries(grouped).map(([type, list]) => (
-            <div key={type}>
-              <div className="font-body text-[10px] uppercase tracking-widest text-cream/40 mb-1">
-                {TYPE_LABEL[type] || type}
+          {mode === 'brand' && (
+            <>
+              {Object.entries(grouped).map(([type, list]) => (
+                <div key={type}>
+                  <div className="font-body text-[10px] uppercase tracking-widest text-cream/40 mb-1">
+                    {TYPE_LABEL[type] || type}
+                  </div>
+                  <div className="flex flex-wrap gap-1">
+                    {list.map((b) => {
+                      const price = brandPriceMap.get(`${b.id}:${selectedGrams}`) ?? 0;
+                      return (
+                        <button
+                          key={b.id}
+                          disabled={!b.in_stock}
+                          onClick={() => onChangeProtein(b.id, selectedGrams)}
+                          className={`px-2 py-1 font-mono text-xs border ${
+                            selectedBrandId === b.id ? 'border-red text-cream' : 'border-cream/20 text-cream/60'
+                          } ${!b.in_stock ? 'opacity-30 cursor-not-allowed' : ''}`}
+                        >
+                          {b.name}
+                          {price > 0 ? ` +${rupees(price)}` : ''}
+                          {!b.in_stock && ' (out)'}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+              <div>
+                <div className="font-body text-[10px] uppercase tracking-widest text-cream/40 mb-1">Amount</div>
+                <div className="flex gap-1">
+                  {options.map((o) => (
+                    <button
+                      key={o.grams}
+                      onClick={() => onChangeProtein(selectedBrandId, o.grams)}
+                      className={`px-2 py-1 font-mono text-xs border ${
+                        selectedGrams === o.grams ? 'border-red text-cream' : 'border-cream/20 text-cream/60'
+                      }`}
+                    >
+                      {o.grams}g
+                    </button>
+                  ))}
+                </div>
               </div>
-              <div className="flex flex-wrap gap-1">
-                {list.map((b) => (
+            </>
+          )}
+
+          {mode === 'amount' && (
+            <div>
+              <div className="font-body text-[10px] uppercase tracking-widest text-cream/40 mb-1">Amount</div>
+              <div className="flex gap-1">
+                {options.map((o) => (
                   <button
-                    key={b.id}
-                    disabled={!b.in_stock}
-                    onClick={() => onChange(b.id, selectedGrams)}
+                    key={o.grams}
+                    onClick={() => onChangeProtein(selectedBrandId, o.grams)}
                     className={`px-2 py-1 font-mono text-xs border ${
-                      selectedBrandId === b.id ? 'border-red text-cream' : 'border-cream/20 text-cream/60'
-                    } ${!b.in_stock ? 'opacity-30 cursor-not-allowed' : ''}`}
+                      selectedGrams === o.grams ? 'border-red text-cream' : 'border-cream/20 text-cream/60'
+                    }`}
                   >
-                    {b.name}
-                    {!b.in_stock && ' (out)'}
+                    {o.grams}g{o.signature_addon_price_paise > 0 ? ` +${rupees(o.signature_addon_price_paise)}` : ''}
                   </button>
                 ))}
               </div>
             </div>
-          ))}
-          <div>
-            <div className="font-body text-[10px] uppercase tracking-widest text-cream/40 mb-1">Amount</div>
-            <div className="flex gap-1">
-              {options.map((o) => (
-                <button
-                  key={o.grams}
-                  onClick={() => onChange(selectedBrandId, o.grams)}
-                  className={`px-2 py-1 font-mono text-xs border ${
-                    selectedGrams === o.grams ? 'border-red text-cream' : 'border-cream/20 text-cream/60'
-                  }`}
-                >
-                  {o.grams}g{o.price_paise > 0 ? ` +${rupees(o.price_paise)}` : ''}
-                </button>
-              ))}
+          )}
+
+          {addonOptions.length > 0 && (
+            <div>
+              <div className="font-body text-[10px] uppercase tracking-widest text-cream/40 mb-1">Add-ons</div>
+              <div className="flex flex-wrap gap-1">
+                {addonOptions.map((a) => {
+                  const excluded = a.id === CREATINE_ADDON_ID && tier === CREATINE_EXCLUDED_TIER;
+                  if (excluded) return null;
+                  const selected = selectedAddonIds.includes(a.id);
+                  return (
+                    <button
+                      key={a.id}
+                      title={ADDON_NOTES[a.id]}
+                      onClick={() => onToggleAddon(a.id)}
+                      className={`px-2 py-1 font-mono text-xs border ${
+                        selected ? 'border-red text-cream' : 'border-cream/20 text-cream/60'
+                      }`}
+                    >
+                      {a.name} +{rupees(a.price_paise)}
+                    </button>
+                  );
+                })}
+              </div>
+              {addonOptions.some((a) => ADDON_NOTES[a.id]) && (
+                <div className="font-body text-[10px] text-cream/30 mt-1">
+                  {addonOptions
+                    .filter((a) => ADDON_NOTES[a.id])
+                    .map((a) => `${a.name}: ${ADDON_NOTES[a.id]}`)
+                    .join(' · ')}
+                </div>
+              )}
             </div>
-          </div>
+          )}
+
+          {showMilk && milkOptions.length > 0 && (
+            <div>
+              <div className="font-body text-[10px] uppercase tracking-widest text-cream/40 mb-1">Milk</div>
+              <div className="flex flex-wrap gap-1">
+                {milkOptions.map((m) => (
+                  <button
+                    key={m.id}
+                    onClick={() => onSetMilk(m.id)}
+                    className={`px-2 py-1 font-mono text-xs border ${
+                      selectedMilkId === m.id ? 'border-red text-cream' : 'border-cream/20 text-cream/60'
+                    }`}
+                  >
+                    {m.name}
+                    {m.price_paise > 0 ? ` +${rupees(m.price_paise)}` : ''}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

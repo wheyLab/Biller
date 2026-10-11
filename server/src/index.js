@@ -9,6 +9,17 @@ import orders from './routes/orders.js';
 import admin from './routes/admin.js';
 import protein from './routes/protein.js';
 
+// A kiosk server should stay up. Without these, an uncaught error anywhere
+// (a stray socket error, a rejected promise with no .catch) crashes the whole
+// process silently — which is what's been intermittently stopping the app.
+// Log it and keep running instead of dying with no visible cause.
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception (server kept running):', err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled promise rejection (server kept running):', reason);
+});
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const HOST = '127.0.0.1'; // never bind to 0.0.0.0 — single laptop, no LAN clients
 // Dedicated var name (not the generic PORT) so nothing else on the machine —
@@ -36,6 +47,15 @@ if (existsSync(clientDist)) {
   // SPA fallback so /admin (typed by hand, never linked) resolves.
   app.get(/^(?!\/api).*/, (_req, res) => res.sendFile(join(clientDist, 'index.html')));
 }
+
+// Plain JSON errors only, never a stack trace or file path. Body-parser failures
+// (malformed or oversized JSON) happen before any route's own try/catch.
+app.use((err, _req, res, _next) => {
+  if (err.type === 'entity.parse.failed') return res.status(400).json({ error: 'Invalid request.' });
+  if (err.type === 'entity.too.large') return res.status(413).json({ error: 'Request too large.' });
+  console.error('unhandled error:', err);
+  res.status(500).json({ error: 'Something went wrong.' });
+});
 
 app.listen(PORT, HOST, () => {
   console.log(`Whey Lab billing on http://${HOST}:${PORT}`);

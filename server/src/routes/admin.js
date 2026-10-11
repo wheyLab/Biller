@@ -1,6 +1,18 @@
 import { Router } from 'express';
 import { getDb, allConfig, setConfig } from '../lib/db.js';
-import { listBrands, getBrand, adjustStock, lowStockBrands, listAmountOptions } from '../lib/protein.js';
+import {
+  listBrands,
+  getBrand,
+  adjustStock,
+  lowStockBrands,
+  listAmountOptions,
+  listBrandPrices,
+  setBrandPrice,
+  listAddons,
+  getAddon,
+  listMilkOptions,
+  getMilkOption,
+} from '../lib/protein.js';
 
 const router = Router();
 const db = getDb();
@@ -121,10 +133,11 @@ router.put('/config', (req, res) => {
   res.json({ config: allConfig(db) });
 });
 
-// Protein brand stock, for the admin Stock tab.
+// Protein brand stock + the full brand x grams price matrix, for the admin
+// Stock tab (mirrors the shop's printed "Blend Your Protein" board).
 router.get('/stock', (_req, res) => {
   const brands = listBrands(db).map((b) => ({ ...b, low_stock: b.stock_mg < b.low_stock_threshold_mg }));
-  res.json({ brands, amount_options: listAmountOptions(db) });
+  res.json({ brands, amount_options: listAmountOptions(db), brand_prices: listBrandPrices(db) });
 });
 
 // Create a new protein brand.
@@ -172,20 +185,77 @@ router.post('/stock/:id/restock', (req, res) => {
   res.json({ ...getBrand(db, req.params.id), stock_mg });
 });
 
-// Edit a protein amount tier's price (dummy pricing until real prices are set).
+// Edit a protein amount tier's flat Signature-tier surcharge (Originals/Lab
+// Blend pricing is per-brand — see /protein-brand-prices below).
 router.put('/protein-options/:grams', (req, res) => {
   const grams = Number(req.params.grams);
   const existing = db.prepare('SELECT * FROM protein_amount_options WHERE grams = ?').get(grams);
   if (!existing) return res.status(404).json({ error: 'Amount tier not found.' });
+  const { signature_addon_price_paise } = req.body || {};
+  if (signature_addon_price_paise != null && (!Number.isInteger(signature_addon_price_paise) || signature_addon_price_paise < 0)) {
+    return res.status(400).json({ error: 'Price must be a whole number of paise.' });
+  }
+  db.prepare('UPDATE protein_amount_options SET signature_addon_price_paise = ? WHERE grams = ?').run(
+    signature_addon_price_paise ?? existing.signature_addon_price_paise,
+    grams
+  );
+  res.json(db.prepare('SELECT grams, powder_mg, signature_addon_price_paise FROM protein_amount_options WHERE grams = ?').get(grams));
+});
+
+// Edit one cell of the brand x grams price matrix (Originals/Lab Blend).
+router.put('/protein-brand-prices/:brandId/:grams', (req, res) => {
+  const { brandId } = req.params;
+  const grams = Number(req.params.grams);
+  if (!getBrand(db, brandId)) return res.status(404).json({ error: 'Brand not found.' });
+  if (!db.prepare('SELECT 1 FROM protein_amount_options WHERE grams = ?').get(grams)) {
+    return res.status(404).json({ error: 'Amount tier not found.' });
+  }
   const { price_paise } = req.body || {};
+  if (!Number.isInteger(price_paise) || price_paise < 0) {
+    return res.status(400).json({ error: 'Price must be a whole number of paise.' });
+  }
+  setBrandPrice(db, brandId, grams, price_paise);
+  res.json({ brand_id: brandId, grams, price_paise });
+});
+
+// Add-ons (chia seeds, seed mix, coffee shot, creatine) and milk options —
+// price-only editing, matching the protein tiers above.
+router.get('/addons', (_req, res) => {
+  res.json({ addons: listAddons(db) });
+});
+
+router.put('/addons/:id', (req, res) => {
+  const existing = getAddon(db, req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Add-on not found.' });
+  const { price_paise, is_active } = req.body || {};
   if (price_paise != null && (!Number.isInteger(price_paise) || price_paise < 0)) {
     return res.status(400).json({ error: 'Price must be a whole number of paise.' });
   }
-  db.prepare('UPDATE protein_amount_options SET price_paise = ? WHERE grams = ?').run(
+  db.prepare('UPDATE addon_options SET price_paise = ?, is_active = ? WHERE id = ?').run(
     price_paise ?? existing.price_paise,
-    grams
+    is_active === undefined ? (existing.is_active ? 1 : 0) : is_active ? 1 : 0,
+    req.params.id
   );
-  res.json(db.prepare('SELECT * FROM protein_amount_options WHERE grams = ?').get(grams));
+  res.json(getAddon(db, req.params.id));
+});
+
+router.get('/milk-options', (_req, res) => {
+  res.json({ milk_options: listMilkOptions(db) });
+});
+
+router.put('/milk-options/:id', (req, res) => {
+  const existing = getMilkOption(db, req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Milk option not found.' });
+  const { price_paise, is_active } = req.body || {};
+  if (price_paise != null && (!Number.isInteger(price_paise) || price_paise < 0)) {
+    return res.status(400).json({ error: 'Price must be a whole number of paise.' });
+  }
+  db.prepare('UPDATE milk_options SET price_paise = ?, is_active = ? WHERE id = ?').run(
+    price_paise ?? existing.price_paise,
+    is_active === undefined ? (existing.is_active ? 1 : 0) : is_active ? 1 : 0,
+    req.params.id
+  );
+  res.json(getMilkOption(db, req.params.id));
 });
 
 // Recompute a customer's cached points balance from the ledger (source of truth).

@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { MenuItem, OrderResult, CustomerLookup, CustomerIdentity, ProteinBrand, ProteinAmountOption, ProteinDefault } from '../api';
+import type { MenuItem, OrderResult, CustomerLookup, CustomerIdentity, ProteinData } from '../api';
 import { api } from '../api';
 import { ticket, useTicket } from '../store/ticket';
-import { Wordmark } from './Wordmark';
+import { FitCanvas } from './FitCanvas';
 import { MenuGrid } from './MenuGrid';
+import { ProteinPoster } from './ProteinPoster';
 import { TicketRail } from './TicketRail';
 import { BillModal } from './BillModal';
 
-type Phase = 'start' | 'choose' | 'new' | 'existing' | 'order';
+// menu (full-screen, opens here) -> choose customer -> new/existing -> pay
+type Phase = 'menu' | 'choose' | 'new' | 'existing' | 'pay';
 const HOTKEY_SEQUENCE = '123456789qwertyuasdfgh'.split('');
 const NO_IDENTITY: CustomerIdentity = { phone: null, username: null };
 
@@ -21,17 +23,17 @@ function useClock() {
 }
 
 export function BillingApp() {
-  const [phase, setPhase] = useState<Phase>('start');
+  const [phase, setPhase] = useState<Phase>('menu');
   const [identity, setIdentity] = useState<CustomerIdentity>(NO_IDENTITY);
   const [customer, setCustomer] = useState<CustomerLookup | null>(null);
   const [prefill, setPrefill] = useState<CustomerIdentity>(NO_IDENTITY);
   const [items, setItems] = useState<MenuItem[]>([]);
   const [completed, setCompleted] = useState<OrderResult | null>(null);
-  const [protein, setProtein] = useState<{
-    brands: ProteinBrand[];
-    amount_options: ProteinAmountOption[];
-    default: ProteinDefault;
-  } | null>(null);
+  const [protein, setProtein] = useState<ProteinData | null>(null);
+  // The cart overlays the menu (the menu never moves). It opens on add; the
+  // customer can tuck it away to reach the items underneath, and it comes
+  // back on the next add.
+  const [cartHidden, setCartHidden] = useState(false);
   const { lines } = useTicket();
   const now = useClock();
 
@@ -44,7 +46,13 @@ export function BillingApp() {
   // Every ticket line needs a protein choice; this is what "just tap the
   // item" defaults to when staff don't bother picking one explicitly.
   function addToTicket(id: string) {
-    ticket.add(id, protein?.default.brandId ?? 'muscleblaze', protein?.default.grams ?? 20);
+    setCartHidden(false);
+    ticket.add(
+      id,
+      protein?.default.brandId ?? 'muscleblaze',
+      protein?.default.grams ?? 20,
+      protein?.default.milkId ?? 'regular'
+    );
   }
 
   const hotkeys = useMemo(() => {
@@ -61,9 +69,28 @@ export function BillingApp() {
     return { map, byKey };
   }, [items]);
 
-  // Hotkeys only while ringing up an order.
+  // Kiosk behaviour: the billing screens shouldn't feel like a web page.
+  // No right-click menu, and if the browser is showing its own toolbars,
+  // go fullscreen on the first tap (a no-op in kiosk mode, which is already full).
   useEffect(() => {
-    if (phase !== 'order') return;
+    const noMenu = (e: Event) => e.preventDefault();
+    const goFullscreen = () => {
+      const chromeVisible = window.screen.height - window.innerHeight > 40;
+      if (chromeVisible && !document.fullscreenElement) {
+        document.documentElement.requestFullscreen?.().catch(() => {});
+      }
+    };
+    window.addEventListener('contextmenu', noMenu);
+    window.addEventListener('pointerdown', goFullscreen, { once: true });
+    return () => {
+      window.removeEventListener('contextmenu', noMenu);
+      window.removeEventListener('pointerdown', goFullscreen);
+    };
+  }, []);
+
+  // Hotkeys only while picking items on the menu.
+  useEffect(() => {
+    if (phase !== 'menu') return;
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement;
       if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return;
@@ -77,43 +104,49 @@ export function BillingApp() {
     return () => window.removeEventListener('keydown', onKey);
   }, [phase, hotkeys, protein]);
 
+  // The cart is built first, so choosing a customer must never clear it.
   function startOrder(id: CustomerIdentity, cust: CustomerLookup | null) {
-    ticket.clear();
     setIdentity(id);
     setCustomer(cust);
-    setPhase('order');
+    setPhase('pay');
+  }
+
+  // Back to the menu with the cart intact; forget any customer picked so far.
+  function backToMenu() {
+    setIdentity(NO_IDENTITY);
+    setCustomer(null);
+    setPrefill(NO_IDENTITY);
+    setPhase('menu');
   }
 
   function reset() {
     ticket.clear();
-    setIdentity(NO_IDENTITY);
-    setCustomer(null);
-    setPrefill(NO_IDENTITY);
-    setPhase('start');
+    backToMenu();
   }
 
-  if (phase === 'start') {
-    return (
-      <Screen now={now}>
-        <div className="flex-1 flex flex-col items-center justify-center gap-8">
-          <div className="text-center">
-            <Wordmark size="lg" />
-            <p className="font-body text-cream/70 mt-3 tracking-wide">Gains are engineered, not accidental.</p>
-          </div>
-          <button
-            onClick={() => setPhase('choose')}
-            className="px-20 py-8 bg-red text-cream font-display text-5xl tracking-widest"
-          >
-            ORDER
-          </button>
-        </div>
-      </Screen>
-    );
-  }
+  const railProps = {
+    items,
+    lines,
+    identity,
+    customer,
+    proteinBrands: protein?.brands ?? [],
+    proteinOptions: protein?.amount_options ?? [],
+    brandPrices: protein?.brand_prices ?? [],
+    addonOptions: protein?.addons ?? [],
+    milkOptions: protein?.milk_options ?? [],
+    modeByTier: protein?.mode_by_tier ?? {},
+    onAdd: addToTicket,
+    onDec: ticket.dec,
+    onRemove: ticket.remove,
+    onSetProtein: ticket.setProtein,
+    onToggleAddon: ticket.toggleAddon,
+    onSetMilk: ticket.setMilk,
+    onComplete: setCompleted,
+  };
 
   if (phase === 'choose') {
     return (
-      <Screen now={now} onBack={reset}>
+      <Screen now={now} onBack={backToMenu}>
         <div className="flex-1 flex flex-col items-center justify-center gap-6">
           <h1 className="font-display text-4xl text-cream">New or returning?</h1>
           <div className="flex gap-6">
@@ -163,51 +196,71 @@ export function BillingApp() {
     );
   }
 
-  // phase === 'order'
+  if (phase === 'pay') {
+    return (
+      <Screen now={now} onBack={() => setPhase('choose')}>
+        <div className="flex-1 min-h-0 flex justify-center pt-4">
+          <TicketRail {...railProps} stage="pay" className="w-full max-w-xl border-2 border-cream/15" />
+        </div>
+        {completed && (
+          <BillModal
+            orderId={completed.id}
+            onClose={() => {
+              setCompleted(null);
+              reset();
+              loadMenu();
+            }}
+          />
+        )}
+      </Screen>
+    );
+  }
+
+  // phase === 'menu': the poster menu fills the screen and stays put; the cart
+  // slides over it from the right once something has been added. The protein
+  // board sits permanently beside it, exactly like the second sign on the
+  // shop's wall — it's reference material customers glance at while ordering,
+  // not part of the ordering flow itself.
+  const itemCount = Object.values(lines).reduce((n, l) => n + l.quantity, 0);
+  const hasItems = itemCount > 0;
+  const cartShown = hasItems && !cartHidden;
   return (
-    <div className="h-full flex flex-col">
-      <div className="flex items-center justify-between px-6 py-3 border-b-2 border-cream/15">
-        <div className="flex items-center gap-4">
-          <Wordmark size="sm" />
-          <span className="font-body text-cream/70">
-            {customer ? customer.first_name || 'Member' : 'Walk-in'}
-            {customer?.username && <span className="text-cream/40"> @{customer.username}</span>}
-          </span>
+    <div className="relative h-full overflow-hidden bg-poster">
+      <div className="absolute inset-0 flex">
+        <div className="relative min-w-0 flex-1">
+          <FitCanvas>
+            <MenuGrid items={items} onAdd={addToTicket} hotkeys={hotkeys.map} />
+          </FitCanvas>
         </div>
-        <div className="flex items-center gap-4">
-          <span className="font-mono text-cream/50 text-sm">{now.toLocaleString()}</span>
-          <button onClick={reset} className="font-body text-sm text-cream/50 underline underline-offset-4">
-            Cancel
-          </button>
+        <div className="w-[320px] shrink-0 border-l-2 border-cream/15">
+          <ProteinPoster protein={protein} />
         </div>
       </div>
-      <div className="flex-1 flex overflow-hidden">
-        <div className="flex-1 overflow-y-auto p-6">
-          <MenuGrid items={items} onAdd={addToTicket} hotkeys={hotkeys.map} />
-        </div>
-        <TicketRail
-          items={items}
-          lines={lines}
-          identity={identity}
-          customer={customer}
-          proteinBrands={protein?.brands ?? []}
-          proteinOptions={protein?.amount_options ?? []}
-          onAdd={addToTicket}
-          onDec={ticket.dec}
-          onRemove={ticket.remove}
-          onSetProtein={ticket.setProtein}
-          onComplete={setCompleted}
-        />
-      </div>
-      {completed && (
-        <BillModal
-          orderId={completed.id}
-          onClose={() => {
-            setCompleted(null);
-            reset();
-            loadMenu();
-          }}
-        />
+
+      <aside
+        inert={!cartShown}
+        className={`absolute inset-y-0 right-0 w-[380px] border-l-2 border-cream/15 bg-ink transition-[transform,box-shadow] duration-300 ${
+          cartShown ? 'translate-x-0 shadow-[-16px_0_40px_rgba(0,0,0,0.5)]' : 'translate-x-full shadow-none'
+        }`}
+      >
+        <button
+          onClick={() => setCartHidden(true)}
+          aria-label="Hide order"
+          className={`absolute -left-9 top-1/2 h-16 w-9 -translate-y-1/2 border-2 border-r-0 border-cream/15 bg-ink font-mono text-cream/70 transition-opacity ${cartShown ? 'opacity-100' : 'opacity-0'}`}
+        >
+          ▸
+        </button>
+        <TicketRail {...railProps} stage="cart" className="w-full" onCheckout={() => setPhase('choose')} onClear={ticket.clear} />
+      </aside>
+
+      {hasItems && cartHidden && (
+        <button
+          onClick={() => setCartHidden(false)}
+          aria-label="Show order"
+          className="absolute right-0 top-1/2 flex h-44 w-11 -translate-y-1/2 items-center justify-center bg-red font-display text-xl tracking-widest text-cream [writing-mode:vertical-rl]"
+        >
+          ORDER · {itemCount}
+        </button>
       )}
     </div>
   );

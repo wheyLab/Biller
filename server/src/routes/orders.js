@@ -3,26 +3,40 @@ import { getDb, nextOrderNumber, allConfig } from '../lib/db.js';
 import { computeOrderTotals, splitExclusive } from '../lib/money.js';
 import { loyaltySettings, pointsEarned, canRedeem, isRedeemable } from '../lib/loyalty.js';
 import { normalizeUsername, isValidUsername } from '../lib/username.js';
-import { getBrand, getAmountOption, deductForOrder, defaultSelection } from '../lib/protein.js';
+import {
+  getBrand,
+  getAmountOption,
+  getBrandPrice,
+  getAddon,
+  getMilkOption,
+  deductForOrder,
+  defaultSelection,
+  proteinModeForTier,
+} from '../lib/protein.js';
 
 const router = Router();
 const db = getDb();
 
 const isPhone = (p) => /^\d{10}$/.test(p);
 const PAYMENTS = new Set(['cash', 'upi', 'card']);
+const MAX_QTY_PER_ITEM = 99; // a fat-finger / bad-request guard, far above any real order
+const MAX_ADDONS_PER_LINE = 10; // a bad-request guard; the real menu only has 4
 
 // Create an order. Everything below runs in a single transaction so a crash
 // mid-order leaves earlier completed orders intact and burns no order number.
 router.post('/', (req, res) => {
   try {
     const body = req.body || {};
-    const { items, payment_method, phone, username: rawUsername, first_name, redeem } = body;
+    const { items, payment_method, phone, username: rawUsername, first_name, redeem, ten_percent_off, manual_discount_paise } = body;
 
     if (!Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ error: 'Add at least one item.' });
     }
     if (!PAYMENTS.has(payment_method)) {
       return res.status(400).json({ error: 'Choose a payment method.' });
+    }
+    if (manual_discount_paise != null && (!Number.isInteger(manual_discount_paise) || manual_discount_paise < 0)) {
+      return res.status(400).json({ error: 'Invalid discount.' });
     }
     if (phone != null && !isPhone(phone)) {
       return res.status(400).json({ error: 'Enter a 10-digit number.' });
@@ -44,43 +58,117 @@ router.post('/', (req, res) => {
       if (!Number.isInteger(qty) || qty <= 0) {
         return res.status(400).json({ error: 'Invalid quantity.' });
       }
+      if (qty > MAX_QTY_PER_ITEM) {
+        return res.status(400).json({ error: `Quantity too large (max ${MAX_QTY_PER_ITEM} per item).` });
+      }
       const mi = getItem.get(li.menu_item_id);
       if (!mi || !mi.is_available || mi.price_paise == null) {
         return res.status(400).json({ error: 'That item is not available.' });
       }
 
-      // Protein choice: an unspecified brand/amount falls back to the
-      // configured default rather than skipping the add-on — every smoothie
-      // gets a protein selection one way or another.
-      const brandId = li.protein_brand_id || def.brandId;
-      const grams = li.protein_grams != null ? Number(li.protein_grams) : def.grams;
-      const brand = getBrand(db, brandId);
-      if (!brand || !brand.is_active) {
-        return res.status(400).json({ error: 'Choose a valid protein brand.' });
+      // Protein choice depends on the item's tier — see PROTEIN_MODE_BY_TIER.
+      // 'brand': Originals & Lab Blend, customer picks brand + amount, priced
+      //   from the per-brand board (MuscleBlaze 20g = the listed price, ₹0 add-on).
+      // 'amount': Signature — amount only, flat per-gram surcharge, no brand
+      //   pick; stock is still drawn from the default brand under the hood.
+      // 'none': everything else — fixed recipe, no protein line at all.
+      const mode = proteinModeForTier(mi.tier);
+      let proteinBrandId = null;
+      let proteinGrams = null;
+      let proteinPowderMg = 0;
+      let proteinAddonPaise = 0;
+      let nameSuffix = '';
+
+      if (mode === 'brand') {
+        const brandId = li.protein_brand_id || def.brandId;
+        const grams = li.protein_grams != null ? Number(li.protein_grams) : def.grams;
+        const brand = getBrand(db, brandId);
+        if (!brand || !brand.is_active) {
+          return res.status(400).json({ error: 'Choose a valid protein brand.' });
+        }
+        const amountOption = getAmountOption(db, grams);
+        if (!amountOption) {
+          return res.status(400).json({ error: 'Choose a valid protein amount.' });
+        }
+        const addon = getBrandPrice(db, brandId, grams);
+        if (addon == null) {
+          return res.status(400).json({ error: 'That brand and amount combination is not priced.' });
+        }
+        proteinBrandId = brand.id;
+        proteinGrams = grams;
+        proteinPowderMg = amountOption.powder_mg;
+        proteinAddonPaise = addon;
+        nameSuffix += ` — ${brand.name} ${grams}g`;
+      } else if (mode === 'amount') {
+        const grams = li.protein_grams != null ? Number(li.protein_grams) : def.grams;
+        const amountOption = getAmountOption(db, grams);
+        if (!amountOption) {
+          return res.status(400).json({ error: 'Choose a valid protein amount.' });
+        }
+        proteinBrandId = def.brandId; // no customer-facing brand choice on Signature
+        proteinGrams = grams;
+        proteinPowderMg = amountOption.powder_mg;
+        proteinAddonPaise = amountOption.signature_addon_price_paise;
+        nameSuffix += ` — ${grams}g protein`;
       }
-      const amountOption = getAmountOption(db, grams);
-      if (!amountOption) {
-        return res.status(400).json({ error: 'Choose a valid protein amount.' });
+      // mode === 'none': proteinBrandId stays null, no addon, no stock drawn.
+
+      // Add-ons: any combination of the flat-price checkboxes, except
+      // creatine isn't offered on the Bulk tier.
+      const addonIds = Array.isArray(li.addon_ids) ? li.addon_ids : [];
+      if (addonIds.length > MAX_ADDONS_PER_LINE) {
+        return res.status(400).json({ error: 'Too many add-ons.' });
+      }
+      const addons = [];
+      for (const id of addonIds) {
+        const a = getAddon(db, id);
+        if (!a || !a.is_active) return res.status(400).json({ error: 'Choose a valid add-on.' });
+        if (a.id === 'creatine' && mi.tier === 'Bulk') {
+          return res.status(400).json({ error: 'Creatine is not available on the Bulk series.' });
+        }
+        addons.push(a);
+      }
+      const addonsPaise = addons.reduce((s, a) => s + a.price_paise, 0);
+      if (addons.length) nameSuffix += ` + ${addons.map((a) => a.name).join(', ')}`;
+
+      // Milk: single choice, not offered on Clear Protein (no milk in that
+      // recipe). An unspecified choice elsewhere defaults to Regular (₹0),
+      // same "always resolved" philosophy as the protein default.
+      let milk = null;
+      if (mi.tier !== 'Clear Protein') {
+        const milkId = li.milk_id || def.milkId;
+        milk = getMilkOption(db, milkId);
+        if (!milk || !milk.is_active) {
+          return res.status(400).json({ error: 'Choose a valid milk option.' });
+        }
+        if (milk.price_paise > 0) nameSuffix += ` (${milk.name})`;
       }
 
       lines.push({
         menu_item_id: mi.id,
-        name_snapshot: `${mi.name} — ${brand.name} ${grams}g`,
-        unit_price_paise: mi.price_paise + amountOption.price_paise,
+        name_snapshot: `${mi.name}${nameSuffix}`,
+        unit_price_paise: mi.price_paise + proteinAddonPaise + addonsPaise + (milk?.price_paise || 0),
         tier: mi.tier,
         quantity: qty,
-        protein_brand_id: brand.id,
-        protein_grams: grams,
-        protein_powder_mg: amountOption.powder_mg,
-        protein_addon_price_paise: amountOption.price_paise,
+        protein_brand_id: proteinBrandId,
+        protein_grams: proteinGrams,
+        protein_powder_mg: proteinPowderMg,
+        protein_addon_price_paise: proteinAddonPaise,
+        addons,
+        milk,
       });
     }
 
     const s = loyaltySettings(db);
+    const subtotalPaise = lines.reduce((sum, l) => sum + l.unit_price_paise * l.quantity, 0);
 
     // Resolve redemption (optional). One free shake of an eligible tier.
     let discountPaise = 0;
     let pointsRedeemed = 0;
+    // Flat/percentage discounts stack with redemption; computeOrderTotals()
+    // below clamps the combined total so it can never take the order negative.
+    if (manual_discount_paise) discountPaise += manual_discount_paise;
+    if (ten_percent_off) discountPaise += Math.round(subtotalPaise * 0.1);
     let customer = null;
     if (phone) {
       customer = db.prepare('SELECT * FROM customers WHERE phone = ?').get(phone);
@@ -98,7 +186,7 @@ router.post('/', (req, res) => {
       if (!isRedeemable(target.tier, s.eligibleTiers)) {
         return res.status(400).json({ error: 'That item is not eligible for redemption.' });
       }
-      discountPaise = target.unit_price_paise; // one free unit
+      discountPaise += target.unit_price_paise; // one free unit, on top of any other discount
       pointsRedeemed = s.redeemThreshold;
     }
 
@@ -145,15 +233,27 @@ router.post('/', (req, res) => {
       const insItem = db.prepare(
         `INSERT INTO order_items
           (order_id, menu_item_id, name_snapshot, unit_price_paise_snapshot, quantity,
-           protein_brand_id, protein_grams, protein_powder_mg_snapshot, protein_addon_price_paise_snapshot)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+           protein_brand_id, protein_grams, protein_powder_mg_snapshot, protein_addon_price_paise_snapshot,
+           milk_option_id, milk_name_snapshot, milk_price_paise_snapshot)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      );
+      const insAddon = db.prepare(
+        `INSERT INTO order_item_addons (order_item_id, addon_id, name_snapshot, price_paise_snapshot)
+         VALUES (?, ?, ?, ?)`
       );
       for (const l of lines) {
-        insItem.run(
+        const orderItemId = insItem.run(
           orderId, l.menu_item_id, l.name_snapshot, l.unit_price_paise, l.quantity,
-          l.protein_brand_id, l.protein_grams, l.protein_powder_mg, l.protein_addon_price_paise
-        );
-        deductForOrder(db, l.protein_brand_id, l.protein_powder_mg * l.quantity, orderId, now);
+          l.protein_brand_id, l.protein_grams, l.protein_powder_mg, l.protein_addon_price_paise,
+          l.milk?.id ?? null, l.milk?.name ?? null, l.milk?.price_paise ?? 0
+        ).lastInsertRowid;
+        for (const a of l.addons) {
+          insAddon.run(orderItemId, a.id, a.name, a.price_paise);
+        }
+        // 'none'-mode items (Clear Protein, Bulk, Caffenizer) have no brand and draw no stock.
+        if (l.protein_brand_id) {
+          deductForOrder(db, l.protein_brand_id, l.protein_powder_mg * l.quantity, orderId, now);
+        }
       }
 
       // Loyalty ledger is the source of truth; balance cache is derived from it.

@@ -4,10 +4,14 @@ PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS menu_items (
   id           TEXT PRIMARY KEY,          -- e.g. WL-01
   name         TEXT NOT NULL,
-  tier         TEXT,                       -- Caffeinated | Originals | Daily | Signature | Clear Whey
+  tier         TEXT,                       -- Originals | Clear Protein | Signature | Bulk | Caffenizer | Lab Blend
   price_paise  INTEGER,                    -- nullable while a price is unresolved
   sort_order   INTEGER NOT NULL DEFAULT 0,
-  is_available INTEGER NOT NULL DEFAULT 0  -- boolean 0/1
+  is_available INTEGER NOT NULL DEFAULT 0, -- boolean 0/1
+  code         TEXT,                       -- periodic-table style symbol on the menu card, e.g. 'Cv'
+  badge        INTEGER,                    -- small number on the card: kcal (caffeine mg for Caffenizer)
+  macros       TEXT,                       -- display line, e.g. '340 kcal · 3.6g fat · 23.4g PRO'
+  image        TEXT                        -- photo path under the client's public/, e.g. '/menu/WL-17.webp'
 );
 
 CREATE TABLE IF NOT EXISTS customers (
@@ -39,12 +43,46 @@ CREATE TABLE IF NOT EXISTS order_items (
   order_id                            INTEGER NOT NULL REFERENCES orders(id),
   menu_item_id                        TEXT NOT NULL,
   name_snapshot                       TEXT NOT NULL,
-  unit_price_paise_snapshot           INTEGER NOT NULL, -- includes the protein add-on price
+  unit_price_paise_snapshot           INTEGER NOT NULL, -- item + protein + add-ons + milk, all in
   quantity                            INTEGER NOT NULL CHECK (quantity > 0),
-  protein_brand_id                    TEXT REFERENCES protein_brands(id),
-  protein_grams                       INTEGER,           -- 20 | 30 | 40 | 50 (marketed protein grams)
+  protein_brand_id                    TEXT REFERENCES protein_brands(id), -- null: this tier has no protein choice
+  protein_grams                       INTEGER,           -- 20 | 25 | 30 | 40 (marketed protein grams)
   protein_powder_mg_snapshot          INTEGER,           -- actual powder deducted from stock, in mg
-  protein_addon_price_paise_snapshot  INTEGER NOT NULL DEFAULT 0
+  protein_addon_price_paise_snapshot  INTEGER NOT NULL DEFAULT 0,
+  milk_option_id                      TEXT REFERENCES milk_options(id),
+  milk_name_snapshot                  TEXT,
+  milk_price_paise_snapshot           INTEGER NOT NULL DEFAULT 0
+);
+
+-- Chia seeds, seed mix, coffee shot, creatine — flat-price checkboxes, any
+-- combination, available on every item except where excluded in code
+-- (creatine isn't offered on the Bulk tier).
+CREATE TABLE IF NOT EXISTS addon_options (
+  id          TEXT PRIMARY KEY,
+  name        TEXT NOT NULL,
+  price_paise INTEGER NOT NULL DEFAULT 0,
+  sort_order  INTEGER NOT NULL DEFAULT 0,
+  is_active   INTEGER NOT NULL DEFAULT 1
+);
+
+-- One order_items row can have several add-ons; this is the join, with a
+-- snapshot so a later price change doesn't alter a past receipt.
+CREATE TABLE IF NOT EXISTS order_item_addons (
+  id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+  order_item_id         INTEGER NOT NULL REFERENCES order_items(id),
+  addon_id              TEXT NOT NULL REFERENCES addon_options(id),
+  name_snapshot         TEXT NOT NULL,
+  price_paise_snapshot  INTEGER NOT NULL
+);
+
+-- Regular / oat / almond — single-select, not offered on Clear Protein (no
+-- milk in that recipe at all).
+CREATE TABLE IF NOT EXISTS milk_options (
+  id          TEXT PRIMARY KEY,
+  name        TEXT NOT NULL,
+  price_paise INTEGER NOT NULL DEFAULT 0,
+  sort_order  INTEGER NOT NULL DEFAULT 0,
+  is_active   INTEGER NOT NULL DEFAULT 1
 );
 
 -- Protein brands staff stock and choose from at checkout. stock_mg is a cache
@@ -59,13 +97,28 @@ CREATE TABLE IF NOT EXISTS protein_brands (
   sort_order                INTEGER NOT NULL DEFAULT 0
 );
 
--- The 20/30/40/50g protein tiers a customer can pick. powder_mg is how much
+-- The 20/25/30/40g protein tiers a customer can pick. powder_mg is how much
 -- powder that tier actually consumes (protein powder isn't 100% protein by
--- weight); price is a placeholder until real pricing is decided.
+-- weight) — the same across brands, per the shop's own conversion.
+-- signature_addon_price_paise is the flat per-gram surcharge for the
+-- Signature tier, which doesn't offer a brand choice (see protein_brand_prices
+-- for the Originals/Lab Blend per-brand schedule). price_paise is unused —
+-- kept only so an old row shape doesn't need a destructive migration.
 CREATE TABLE IF NOT EXISTS protein_amount_options (
-  grams        INTEGER PRIMARY KEY,   -- marketed protein grams: 20 | 30 | 40 | 50
-  powder_mg    INTEGER NOT NULL,
-  price_paise  INTEGER NOT NULL DEFAULT 0
+  grams                       INTEGER PRIMARY KEY,   -- marketed protein grams: 20 | 25 | 30 | 40
+  powder_mg                   INTEGER NOT NULL,
+  price_paise                 INTEGER NOT NULL DEFAULT 0, -- deprecated, unused
+  signature_addon_price_paise INTEGER NOT NULL DEFAULT 0
+);
+
+-- Per-brand, per-gram add-on price (Originals & Lab Blend tiers only — the
+-- shop's "Blend Your Protein" board). MuscleBlaze at 20g is the baseline
+-- (₹0): it's already the menu-listed price of every drink.
+CREATE TABLE IF NOT EXISTS protein_brand_prices (
+  brand_id     TEXT NOT NULL REFERENCES protein_brands(id),
+  grams        INTEGER NOT NULL REFERENCES protein_amount_options(grams),
+  price_paise  INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (brand_id, grams)
 );
 
 -- Append-only stock movement log (order deductions, restocks, manual

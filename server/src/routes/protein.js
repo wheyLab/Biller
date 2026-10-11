@@ -1,13 +1,22 @@
 import { Router } from 'express';
 import { getDb } from '../lib/db.js';
-import { listBrands, listAmountOptions, defaultSelection } from '../lib/protein.js';
+import {
+  listBrands,
+  listAmountOptions,
+  listBrandPrices,
+  listAddons,
+  listMilkOptions,
+  defaultSelection,
+  PROTEIN_MODE_BY_TIER,
+} from '../lib/protein.js';
 
 const router = Router();
 const db = getDb();
 
-// What the order screen needs to offer the brand/amount picker. Deliberately
-// doesn't expose exact stock numbers here (that's back-office-only) — just
-// enough to render options and know which are currently choosable.
+// Everything the order screen needs to render the protein/add-on/milk
+// picker for any item, priced correctly for its tier. Deliberately doesn't
+// expose exact stock numbers here (that's back-office-only) — just enough
+// to render options and know which are currently choosable.
 router.get('/', (_req, res) => {
   const brands = listBrands(db, { activeOnly: true }).map((b) => ({
     id: b.id,
@@ -18,6 +27,10 @@ router.get('/', (_req, res) => {
   res.json({
     brands,
     amount_options: listAmountOptions(db),
+    brand_prices: listBrandPrices(db),
+    addons: listAddons(db, { activeOnly: true }),
+    milk_options: listMilkOptions(db, { activeOnly: true }),
+    mode_by_tier: PROTEIN_MODE_BY_TIER, // e.g. { Originals: 'brand', 'Lab Blend': 'brand', Signature: 'amount' }
     default: defaultSelection(db),
   });
 });

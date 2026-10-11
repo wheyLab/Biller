@@ -6,6 +6,7 @@
 @import "@fontsource/inter/500.css";
 @import "@fontsource/inter/600.css";
 @import "@fontsource/inter/700.css";
+@import "@fontsource/inter/800.css";
 @import "@fontsource/jetbrains-mono/500.css";
 @import "@fontsource/jetbrains-mono/700.css";
 
@@ -13,6 +14,11 @@
   --color-red: #E8341C;
   --color-ink: #0D0D0D;
   --color-cream: #F3EDE4;
+
+  /* Printed-menu colours, sampled from the reference menu PDF. */
+  --color-poster: #BF1E2D;
+  --color-card: #FAF9DF;
+  --color-caffeine: #A8642B;
 
   --font-display: "Anton", sans-serif;   /* item names, prices, wordmark */
   --font-body: "Inter", sans-serif;      /* plain grotesque body/UI */
@@ -26,7 +32,15 @@
 
 html, body, #root {
   height: 100%;
+  overscroll-behavior: none; /* no pull-to-refresh / swipe-back on a touchscreen */
 }
+
+/* Counter-app feel: no double-tap zoom, no tap flash, no scrollbars on the
+   billing screens (scrolling still works by touch / wheel). */
+body { touch-action: manipulation; }
+* { -webkit-tap-highlight-color: transparent; }
+.no-scrollbar { scrollbar-width: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
 
 body {
   background-color: #0D0D0D;

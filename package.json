@@ -14,7 +14,8 @@
     "start": "npm --prefix server start",
     "serve": "npm run build && npm start",
     "export-db": "npm --prefix server run export-db --",
-    "backup": "npm --prefix server run backup"
+    "backup": "npm --prefix server run backup",
+    "snapshot": "npm --prefix server run snapshot"
   },
   "devDependencies": {
     "concurrently": "^9.1.0"

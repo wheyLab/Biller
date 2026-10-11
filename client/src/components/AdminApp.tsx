@@ -274,21 +274,30 @@ const TYPE_LABEL: Record<string, string> = { whey: 'Whey', yeast: 'Yeast', plant
 function Stock() {
   const [brands, setBrands] = useState<any[]>([]);
   const [options, setOptions] = useState<any[]>([]);
+  const [brandPrices, setBrandPrices] = useState<any[]>([]);
+  const [addons, setAddons] = useState<any[]>([]);
+  const [milks, setMilks] = useState<any[]>([]);
   const [restockGrams, setRestockGrams] = useState<Record<string, string>>({});
   const [newBrand, setNewBrand] = useState({ id: '', name: '', protein_type: 'whey' });
   const [error, setError] = useState('');
 
-  const load = () =>
+  const load = () => {
     api
       .stock()
       .then((d) => {
         setBrands(d.brands);
         setOptions(d.amount_options);
+        setBrandPrices(d.brand_prices);
       })
       .catch(() => {});
+    api.addons().then((d) => setAddons(d.addons)).catch(() => {});
+    api.milkOptions().then((d) => setMilks(d.milk_options)).catch(() => {});
+  };
   useEffect(() => {
     load();
   }, []);
+
+  const brandPriceMap = new Map<string, number>(brandPrices.map((bp) => [`${bp.brand_id}:${bp.grams}`, bp.price_paise]));
 
   async function doRestock(id: string) {
     const grams = Number(restockGrams[id]);
@@ -319,8 +328,33 @@ function Stock() {
     }
   }
 
-  async function savePrice(grams: number, price_paise: number) {
-    await api.updateProteinOptionPrice(grams, price_paise);
+  async function saveSignaturePrice(grams: number, signature_addon_price_paise: number) {
+    await api.updateProteinOptionPrice(grams, signature_addon_price_paise);
+    load();
+  }
+
+  async function saveBrandPrice(brandId: string, grams: number, price_paise: number) {
+    await api.updateProteinBrandPrice(brandId, grams, price_paise);
+    load();
+  }
+
+  async function saveAddon(id: string, price_paise: number) {
+    await api.updateAddon(id, { price_paise });
+    load();
+  }
+
+  async function toggleAddonActive(a: any) {
+    await api.updateAddon(a.id, { is_active: !a.is_active });
+    load();
+  }
+
+  async function saveMilk(id: string, price_paise: number) {
+    await api.updateMilkOption(id, { price_paise });
+    load();
+  }
+
+  async function toggleMilkActive(m: any) {
+    await api.updateMilkOption(m.id, { is_active: !m.is_active });
     load();
   }
 
@@ -344,7 +378,21 @@ function Stock() {
                   <td>{b.name}</td>
                   <td>{TYPE_LABEL[b.protein_type] || b.protein_type}</td>
                   <td className={low ? 'text-red' : ''}>{(b.stock_mg / 1000).toFixed(1)}</td>
-                  <td>{(b.low_stock_threshold_mg / 1000).toFixed(0)}</td>
+                  <td>
+                    <input
+                      key={b.low_stock_threshold_mg}
+                      type="number"
+                      min="0"
+                      defaultValue={Math.round(b.low_stock_threshold_mg / 1000)}
+                      onBlur={(e) => {
+                        const g = Number(e.target.value);
+                        if (Number.isFinite(g) && g >= 0 && Math.round(g * 1000) !== b.low_stock_threshold_mg) {
+                          api.updateStockBrand(b.id, { low_stock_threshold_grams: g }).then(load);
+                        }
+                      }}
+                      className="w-20 bg-transparent border border-cream/20 px-2 py-1 text-cream"
+                    />
+                  </td>
                   <td>
                     <div className="flex items-center gap-1">
                       <input
@@ -408,7 +456,43 @@ function Stock() {
 
       <div>
         <h2 className="font-body uppercase text-xs tracking-widest text-cream/40 mb-3">
-          Protein amount pricing (dummy — decide real pricing later)
+          Brand × grams pricing (Originals &amp; Lab Blend)
+        </h2>
+        <table className="w-full max-w-2xl font-mono text-sm text-cream/80">
+          <thead className="text-cream/40 text-left">
+            <tr>
+              <th>Brand</th>
+              {options.map((o) => (
+                <th key={o.grams}>{o.grams}g</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {brands.map((b) => (
+              <tr key={b.id} className="border-t border-cream/10">
+                <td>{b.name}</td>
+                {options.map((o) => (
+                  <td key={o.grams}>
+                    <input
+                      key={`${b.id}:${o.grams}:${brandPriceMap.get(`${b.id}:${o.grams}`) ?? 0}`}
+                      defaultValue={brandPriceMap.get(`${b.id}:${o.grams}`) ?? 0}
+                      onBlur={(e) => saveBrandPrice(b.id, o.grams, parseInt(e.target.value || '0', 10))}
+                      className="w-20 bg-transparent border border-cream/20 px-2 py-1 text-cream"
+                    />
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <p className="font-body text-xs text-cream/40 mt-1">
+          Price in paise, added on top of the drink's own listed price (MuscleBlaze 20g is the baseline, usually 0).
+        </p>
+      </div>
+
+      <div>
+        <h2 className="font-body uppercase text-xs tracking-widest text-cream/40 mb-3">
+          Signature-tier pricing (flat, no brand choice)
         </h2>
         <table className="w-full max-w-md font-mono text-sm text-cream/80">
           <thead className="text-cream/40 text-left">
@@ -421,8 +505,9 @@ function Stock() {
                 <td>{(o.powder_mg / 1000).toFixed(1)}g powder</td>
                 <td>
                   <input
-                    defaultValue={o.price_paise}
-                    onBlur={(e) => savePrice(o.grams, parseInt(e.target.value || '0', 10))}
+                    key={o.signature_addon_price_paise}
+                    defaultValue={o.signature_addon_price_paise}
+                    onBlur={(e) => saveSignaturePrice(o.grams, parseInt(e.target.value || '0', 10))}
                     className="w-24 bg-transparent border border-cream/20 px-2 py-1 text-cream"
                   />
                 </td>
@@ -430,6 +515,62 @@ function Stock() {
             ))}
           </tbody>
         </table>
+      </div>
+
+      <div>
+        <h2 className="font-body uppercase text-xs tracking-widest text-cream/40 mb-3">Add-ons</h2>
+        <table className="w-full max-w-md font-mono text-sm text-cream/80">
+          <thead className="text-cream/40 text-left">
+            <tr><th>Name</th><th>Price</th><th>Active</th></tr>
+          </thead>
+          <tbody>
+            {addons.map((a) => (
+              <tr key={a.id} className="border-t border-cream/10">
+                <td>{a.name}</td>
+                <td>
+                  <input
+                    key={a.price_paise}
+                    defaultValue={a.price_paise}
+                    onBlur={(e) => saveAddon(a.id, parseInt(e.target.value || '0', 10))}
+                    className="w-24 bg-transparent border border-cream/20 px-2 py-1 text-cream"
+                  />
+                </td>
+                <td>
+                  <input type="checkbox" checked={!!a.is_active} onChange={() => toggleAddonActive(a)} />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <p className="font-body text-xs text-cream/40 mt-1">Creatine is never offered on Bulk-series items.</p>
+      </div>
+
+      <div>
+        <h2 className="font-body uppercase text-xs tracking-widest text-cream/40 mb-3">Milk options</h2>
+        <table className="w-full max-w-md font-mono text-sm text-cream/80">
+          <thead className="text-cream/40 text-left">
+            <tr><th>Name</th><th>Price</th><th>Active</th></tr>
+          </thead>
+          <tbody>
+            {milks.map((m) => (
+              <tr key={m.id} className="border-t border-cream/10">
+                <td>{m.name}</td>
+                <td>
+                  <input
+                    key={m.price_paise}
+                    defaultValue={m.price_paise}
+                    onBlur={(e) => saveMilk(m.id, parseInt(e.target.value || '0', 10))}
+                    className="w-24 bg-transparent border border-cream/20 px-2 py-1 text-cream"
+                  />
+                </td>
+                <td>
+                  <input type="checkbox" checked={!!m.is_active} onChange={() => toggleMilkActive(m)} />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <p className="font-body text-xs text-cream/40 mt-1">Not offered on Clear Protein.</p>
       </div>
     </div>
   );

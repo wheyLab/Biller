@@ -5,11 +5,12 @@
   "type": "module",
   "main": "src/index.js",
   "scripts": {
-    "dev": "node --watch src/index.js",
+    "dev": "node --watch-path=src src/index.js",
     "start": "node src/index.js",
     "seed": "node src/seed.js",
     "export-db": "node src/export-db.js",
-    "backup": "node src/backup-to-repo.js",
+    "backup": "node src/backup.js",
+    "snapshot": "node src/snapshot.js",
     "test": "node --test"
   },
   "dependencies": {

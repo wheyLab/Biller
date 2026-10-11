@@ -12,6 +12,10 @@ function mapItem(r) {
     price_paise: r.price_paise,
     sort_order: r.sort_order,
     is_available: !!r.is_available,
+    code: r.code,
+    badge: r.badge,
+    macros: r.macros,
+    image: r.image,
   };
 }
 

@@ -4,6 +4,16 @@
 // counters pattern.
 import { getConfig } from './db.js';
 
+// Per the shop's "Blend Your Protein" board: brand choice is only offered on
+// Originals and Lab Blend. Signature gets a protein amount but no brand pick
+// (a flat per-gram surcharge instead — protein_amount_options.signature_addon_price_paise).
+// Every other tier (Clear Protein, Bulk, Caffenizer) has no protein picker at
+// all — its price and recipe are fixed as listed.
+export const PROTEIN_MODE_BY_TIER = { Originals: 'brand', 'Lab Blend': 'brand', Signature: 'amount' };
+export function proteinModeForTier(tier) {
+  return PROTEIN_MODE_BY_TIER[tier] || 'none';
+}
+
 export function listBrands(db, { activeOnly = false } = {}) {
   const sql = activeOnly
     ? 'SELECT * FROM protein_brands WHERE is_active = 1 ORDER BY sort_order, id'
@@ -17,17 +27,60 @@ export function getBrand(db, id) {
 }
 
 export function listAmountOptions(db) {
-  return db.prepare('SELECT * FROM protein_amount_options ORDER BY grams').all();
+  return db.prepare('SELECT grams, powder_mg, signature_addon_price_paise FROM protein_amount_options ORDER BY grams').all();
 }
 
 export function getAmountOption(db, grams) {
-  return db.prepare('SELECT * FROM protein_amount_options WHERE grams = ?').get(grams) || null;
+  return db.prepare('SELECT grams, powder_mg, signature_addon_price_paise FROM protein_amount_options WHERE grams = ?').get(grams) || null;
+}
+
+// The full brand x grams matrix (used by the order screen to price every
+// combination, and by admin to edit it).
+export function listBrandPrices(db) {
+  return db.prepare('SELECT brand_id, grams, price_paise FROM protein_brand_prices ORDER BY brand_id, grams').all();
+}
+
+export function getBrandPrice(db, brandId, grams) {
+  const row = db.prepare('SELECT price_paise FROM protein_brand_prices WHERE brand_id = ? AND grams = ?').get(brandId, grams);
+  return row ? row.price_paise : null;
+}
+
+export function setBrandPrice(db, brandId, grams, pricePaise) {
+  db.prepare(
+    `INSERT INTO protein_brand_prices (brand_id, grams, price_paise) VALUES (?, ?, ?)
+     ON CONFLICT(brand_id, grams) DO UPDATE SET price_paise = excluded.price_paise`
+  ).run(brandId, grams, pricePaise);
+}
+
+export function listAddons(db, { activeOnly = false } = {}) {
+  const sql = activeOnly
+    ? 'SELECT * FROM addon_options WHERE is_active = 1 ORDER BY sort_order, id'
+    : 'SELECT * FROM addon_options ORDER BY sort_order, id';
+  return db.prepare(sql).all().map((r) => ({ ...r, is_active: !!r.is_active }));
+}
+
+export function getAddon(db, id) {
+  const row = db.prepare('SELECT * FROM addon_options WHERE id = ?').get(id);
+  return row ? { ...row, is_active: !!row.is_active } : null;
+}
+
+export function listMilkOptions(db, { activeOnly = false } = {}) {
+  const sql = activeOnly
+    ? 'SELECT * FROM milk_options WHERE is_active = 1 ORDER BY sort_order, id'
+    : 'SELECT * FROM milk_options ORDER BY sort_order, id';
+  return db.prepare(sql).all().map((r) => ({ ...r, is_active: !!r.is_active }));
+}
+
+export function getMilkOption(db, id) {
+  const row = db.prepare('SELECT * FROM milk_options WHERE id = ?').get(id);
+  return row ? { ...row, is_active: !!row.is_active } : null;
 }
 
 export function defaultSelection(db) {
   return {
     brandId: getConfig(db, 'protein.default_brand_id', 'muscleblaze'),
     grams: Number(getConfig(db, 'protein.default_grams', 20)),
+    milkId: getConfig(db, 'protein.default_milk_id', 'regular'),
   };
 }
 

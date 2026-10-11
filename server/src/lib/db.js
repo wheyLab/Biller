@@ -36,7 +36,12 @@ export function getDb() {
   const schema = readFileSync(join(__dirname, '../schema.sql'), 'utf8');
   db.exec(schema);
 
-  ensureColumn(db, 'order_items', 'protein_brand_id', 'protein_brand_id TEXT REFERENCES protein_brands(id)');
+  ensureColumn(db, 'menu_items', 'code', 'code TEXT');
+  ensureColumn(db, 'menu_items', 'badge', 'badge INTEGER');
+  ensureColumn(db, 'menu_items', 'macros', 'macros TEXT');
+  ensureColumn(db, 'menu_items', 'image', 'image TEXT');
+
+  ensureColumn(db, 'order_items', 'protein_brand_id','protein_brand_id TEXT REFERENCES protein_brands(id)');
   ensureColumn(db, 'order_items', 'protein_grams', 'protein_grams INTEGER');
   ensureColumn(db, 'order_items', 'protein_powder_mg_snapshot', 'protein_powder_mg_snapshot INTEGER');
   ensureColumn(
@@ -45,6 +50,17 @@ export function getDb() {
     'protein_addon_price_paise_snapshot',
     'protein_addon_price_paise_snapshot INTEGER NOT NULL DEFAULT 0'
   );
+  ensureColumn(db, 'order_items', 'milk_option_id', 'milk_option_id TEXT REFERENCES milk_options(id)');
+  ensureColumn(db, 'order_items', 'milk_name_snapshot', 'milk_name_snapshot TEXT');
+  ensureColumn(db, 'order_items', 'milk_price_paise_snapshot', 'milk_price_paise_snapshot INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(
+    db,
+    'protein_amount_options',
+    'signature_addon_price_paise',
+    'signature_addon_price_paise INTEGER NOT NULL DEFAULT 0'
+  );
+  // The 50g tier is gone (the real menu board only goes to 40g); 25g is new.
+  db.exec('DELETE FROM protein_amount_options WHERE grams = 50');
 
   // Ensure the order-number counter row exists exactly once.
   db.prepare("INSERT OR IGNORE INTO counters(name, value) VALUES ('order_number', 0)").run();

@@ -1,5 +1,5 @@
 {
-  "_note": "Dummy pricing (price_paise) — real pricing to be decided later. Stock is a starting dummy quantity for each brand; seed.js never overwrites stock_mg on re-run, only name/type/threshold/active/sort_order.",
+  "_note": "Transcribed from the shop's printed 'Blend Your Protein' board. MuscleBlaze at 20g is the baseline: it's already the menu-listed price of every drink, so its price_paise is 0. Brand choice (protein_brand_prices) only applies on Originals & Lab Blend tiers; Signature uses the flat signature_addon_price_paise instead (no brand choice); other tiers get no protein picker at all — see PROTEIN_MODE_BY_TIER in lib/protein.js. Stock is a starting dummy quantity for each brand; seed.js never overwrites stock_mg on re-run, only name/type/threshold/active/sort_order.",
   "brands": [
     { "id": "muscleblaze", "name": "MuscleBlaze", "protein_type": "whey", "sort_order": 1, "initial_stock_mg": 3000000, "low_stock_threshold_mg": 300000 },
     { "id": "gnc", "name": "GNC", "protein_type": "whey", "sort_order": 2, "initial_stock_mg": 3000000, "low_stock_threshold_mg": 300000 },
@@ -8,11 +8,45 @@
     { "id": "origin", "name": "Origin", "protein_type": "plant", "sort_order": 5, "initial_stock_mg": 2000000, "low_stock_threshold_mg": 200000 }
   ],
   "amount_options": [
-    { "grams": 20, "powder_mg": 15000, "price_paise": 0 },
-    { "grams": 30, "powder_mg": 22500, "price_paise": 3000 },
-    { "grams": 40, "powder_mg": 30000, "price_paise": 6000 },
-    { "grams": 50, "powder_mg": 37500, "price_paise": 9000 }
+    { "grams": 20, "powder_mg": 15000, "signature_addon_price_paise": 0 },
+    { "grams": 25, "powder_mg": 18750, "signature_addon_price_paise": 3000 },
+    { "grams": 30, "powder_mg": 22500, "signature_addon_price_paise": 7000 },
+    { "grams": 40, "powder_mg": 30000, "signature_addon_price_paise": 12500 }
+  ],
+  "brand_prices": [
+    { "brand_id": "muscleblaze", "grams": 20, "price_paise": 0 },
+    { "brand_id": "muscleblaze", "grams": 25, "price_paise": 3500 },
+    { "brand_id": "muscleblaze", "grams": 30, "price_paise": 7000 },
+    { "brand_id": "muscleblaze", "grams": 40, "price_paise": 12500 },
+    { "brand_id": "gnc", "grams": 20, "price_paise": 3000 },
+    { "brand_id": "gnc", "grams": 25, "price_paise": 7000 },
+    { "brand_id": "gnc", "grams": 30, "price_paise": 11000 },
+    { "brand_id": "gnc", "grams": 40, "price_paise": 17000 },
+    { "brand_id": "on", "grams": 20, "price_paise": 4000 },
+    { "brand_id": "on", "grams": 25, "price_paise": 8000 },
+    { "brand_id": "on", "grams": 30, "price_paise": 12000 },
+    { "brand_id": "on", "grams": 40, "price_paise": 18000 },
+    { "brand_id": "superyou", "grams": 20, "price_paise": 0 },
+    { "brand_id": "superyou", "grams": 25, "price_paise": 2500 },
+    { "brand_id": "superyou", "grams": 30, "price_paise": 5000 },
+    { "brand_id": "superyou", "grams": 40, "price_paise": 9000 },
+    { "brand_id": "origin", "grams": 20, "price_paise": 0 },
+    { "brand_id": "origin", "grams": 25, "price_paise": 3000 },
+    { "brand_id": "origin", "grams": 30, "price_paise": 6000 },
+    { "brand_id": "origin", "grams": 40, "price_paise": 10500 }
+  ],
+  "addons": [
+    { "id": "chia", "name": "Chia seeds", "price_paise": 2000, "sort_order": 1 },
+    { "id": "seedmix", "name": "Seed Mix", "price_paise": 2000, "sort_order": 2 },
+    { "id": "coffeeshot", "name": "Coffee Shot", "price_paise": 3000, "sort_order": 3 },
+    { "id": "creatine", "name": "Creatine (3g)", "price_paise": 4000, "sort_order": 4 }
+  ],
+  "milk_options": [
+    { "id": "regular", "name": "Regular Milk", "price_paise": 0, "sort_order": 1 },
+    { "id": "oat", "name": "Oat Milk", "price_paise": 6000, "sort_order": 2 },
+    { "id": "almond", "name": "Almond Milk", "price_paise": 6000, "sort_order": 3 }
   ],
   "default_brand_id": "muscleblaze",
-  "default_grams": 20
+  "default_grams": 20,
+  "default_milk_id": "regular"
 }
