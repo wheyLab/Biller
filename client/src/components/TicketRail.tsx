@@ -131,15 +131,12 @@ export function TicketRail({
   const itemCount = lineList.reduce((n, l) => n + l.line.quantity, 0);
   const subtotal = lineList.reduce((s, l) => s + l.unitPaise * l.line.quantity, 0);
 
-  const eligibleTiers = customer?.eligible_tiers || [];
-  const redeemLine = useMemo(() => {
-    const eligible = lineList.filter((l) => l.item && eligibleTiers.includes(l.item.tier || ''));
-    eligible.sort((a, b) => b.unitPaise - a.unitPaise);
-    return eligible[0] || null;
-  }, [lineList, eligibleTiers]);
-
-  const canRedeem = !!customer?.can_redeem && !!redeemLine;
-  const redemptionDiscount = redeem && canRedeem ? redeemLine!.unitPaise : 0;
+  // Loyalty: at the threshold (100 pts) staff can tick a flat amount (₹99) off
+  // any drink — never more than the dearest drink in the order.
+  const redeemValue = customer?.redeem_value_paise ?? 9900;
+  const canRedeem = !!customer?.can_redeem && lineList.length > 0;
+  const redemptionDiscount =
+    redeem && canRedeem ? Math.min(redeemValue, Math.max(...lineList.map((l) => l.unitPaise))) : 0;
   const tenPercentDiscount = tenPercentOff ? Math.round(subtotal * 0.1) : 0;
   const gameLines = lineList.map((l) => ({
     tier: l.item?.tier ?? null,
@@ -163,7 +160,7 @@ export function TicketRail({
   // final amount comes from. 0-value rewards (extra protein, banked story) are
   // listed too, with a word instead of an amount.
   const breakdown: { label: string; paise: number; text?: string }[] = [];
-  if (redemptionDiscount > 0) breakdown.push({ label: `Points: free ${redeemLine!.item.name}`, paise: redemptionDiscount });
+  if (redemptionDiscount > 0) breakdown.push({ label: `Loyalty: ${customer!.redeem_threshold} pts redeemed`, paise: redemptionDiscount });
   if (tenPercentDiscount > 0) breakdown.push({ label: '10% off', paise: tenPercentDiscount });
   if (manualDiscount > 0) breakdown.push({ label: 'Discount', paise: manualDiscount });
   if (gameReward && !gameReward.error) {
@@ -217,7 +214,7 @@ export function TicketRail({
         payment_method: payment,
         phone: identity.phone || undefined,
         username: identity.username || undefined,
-        redeem: redemptionDiscount > 0 ? { menu_item_id: redeemLine!.item.id } : undefined,
+        redeem: redemptionDiscount > 0 || undefined,
         ten_percent_off: tenPercentOff || undefined,
         manual_discount_paise: manualDiscount > 0 ? manualDiscount : undefined,
         game: wonSpin ? { spin_id: wonSpin.spinId } : undefined,
@@ -300,11 +297,13 @@ export function TicketRail({
         {stage === 'pay' && lineList.length > 0 && (
           <div className="mt-5 flex flex-col gap-3">
             <h2 className="font-body uppercase tracking-widest text-xs text-cream/50">Offers</h2>
-        {stage === 'pay' && canRedeem && (
-            <label className="flex items-center gap-2 font-body text-sm text-cream cursor-pointer">
-              <input type="checkbox" checked={redeem} onChange={(e) => setRedeem(e.target.checked)} />
-              Redeem {customer!.redeem_threshold} pts — free {redeemLine!.item.name}
-            </label>
+          {canRedeem && (
+            <OfferBlock title={`Loyalty — ${customer!.points_balance} pts`}>
+              <label className="flex items-center gap-2 font-body text-sm text-cream cursor-pointer">
+                <input type="checkbox" checked={redeem} onChange={(e) => setRedeem(e.target.checked)} />
+                Redeem {customer!.redeem_threshold} pts — {rupees(redeemValue)} off any drink
+              </label>
+            </OfferBlock>
           )}
   
           {stage === 'pay' && lineList.length > 0 && (

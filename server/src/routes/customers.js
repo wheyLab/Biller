@@ -23,6 +23,7 @@ function shapeCustomer(row, db) {
       points_balance: 0,
       can_redeem: false,
       redeem_threshold: s.redeemThreshold,
+      redeem_value_paise: s.redeemValuePaise,
     };
   }
   return {
@@ -32,6 +33,7 @@ function shapeCustomer(row, db) {
     points_balance: row.points_balance,
     can_redeem: canRedeem(row.points_balance, s.redeemThreshold),
     redeem_threshold: s.redeemThreshold,
+    redeem_value_paise: s.redeemValuePaise,
     eligible_tiers: s.eligibleTiers,
   };
 }

@@ -272,7 +272,7 @@ test('orders: an item marked unavailable cannot be sold', async () => {
 test('orders: customers earn points by phone and by username; ledger matches balance', async () => {
   const p = await order([{ menu_item_id: 'WL-24', quantity: 1 }], { phone: '9333333333', first_name: 'Ravi' });
   assert.equal(p.status, 201);
-  assert.equal(p.body.points_earned, Math.floor(p.body.total_paise / 1000));
+  assert.equal(p.body.points_earned, 20); // ₹418.95 would be 41 pts, capped at 20 per order
   assert.equal((await get('/api/customers/9333333333')).body.points_balance, p.body.points_earned);
 
   await post('/api/customers', { username: 'shakefan', first_name: 'Sam' });
@@ -282,32 +282,40 @@ test('orders: customers earn points by phone and by username; ledger matches bal
   assert.equal((await get('/api/customers/9333333333')).body.points_balance, p.body.points_earned); // not mixed up
 });
 
-test('loyalty: redeem needs enough points, an eligible tier, and the item in the order', async () => {
+test('loyalty: points cap at 20 per order; 100 pts = ₹99 off any drink, once per order', async () => {
   const phone = '9444444444';
   // no points yet
   await post('/api/customers', { phone, first_name: 'Meera' });
-  assert.equal((await order([{ menu_item_id: 'WL-17', quantity: 1 }], { phone, redeem: { menu_item_id: 'WL-17' } })).status, 400);
+  assert.equal((await order([{ menu_item_id: 'WL-21', quantity: 1 }], { phone, redeem: true })).status, 400);
   // unknown customer can't redeem either
-  assert.equal((await order([{ menu_item_id: 'WL-17', quantity: 1 }], { redeem: { menu_item_id: 'WL-17' } })).status, 400);
+  assert.equal((await order([{ menu_item_id: 'WL-21', quantity: 1 }], { redeem: true })).status, 400);
 
-  for (let i = 0; i < 4; i++) await order([{ menu_item_id: 'WL-24', quantity: 1 }], { phone }); // 4 x ₹418.95 = 164 pts
-  const bal = (await get(`/api/customers/${phone}`)).body;
-  assert.equal(bal.points_balance, 164);
+  // small orders earn normally, big ones are capped
+  const small = await order([{ menu_item_id: 'WL-17', quantity: 1 }], { phone }); // ₹103.95 → 10 pts
+  assert.equal(small.body.points_earned, 10);
+  for (let i = 0; i < 4; i++) {
+    const big = await order([{ menu_item_id: 'WL-24', quantity: 1 }], { phone }); // ₹418.95 → capped
+    assert.equal(big.body.points_earned, 20);
+  }
+  let bal = (await get(`/api/customers/${phone}`)).body;
+  assert.equal(bal.points_balance, 90);
+  assert.equal(bal.can_redeem, false);
+  await order([{ menu_item_id: 'WL-17', quantity: 1 }], { phone }); // +10 → 100
+  bal = (await get(`/api/customers/${phone}`)).body;
+  assert.equal(bal.points_balance, 100);
   assert.equal(bal.can_redeem, true);
+  assert.equal(bal.redeem_threshold, 100);
+  assert.equal(bal.redeem_value_paise, 9900);
 
-  const items = [{ menu_item_id: 'WL-17', quantity: 1 }, { menu_item_id: 'WL-21', quantity: 1 }];
-  // Signature tier isn't eligible; item must be in the order
-  assert.equal((await order(items, { phone, redeem: { menu_item_id: 'WL-21' } })).status, 400);
-  assert.equal((await order(items, { phone, redeem: { menu_item_id: 'WL-30' } })).status, 400);
-
-  const r = await order(items, { phone, redeem: { menu_item_id: 'WL-17' } });
+  // ₹99 off any drink — here a Signature
+  const r = await order([{ menu_item_id: 'WL-21', quantity: 1 }], { phone, redeem: true });
   assert.equal(r.status, 201);
-  assert.equal(r.body.points_redeemed, 150);
-  assert.equal(r.body.discount_paise, 9900); // one free Classic Vanilla
-  assert.equal(r.body.subtotal_paise, 9900 + 24900);
-  const net = 24900;
+  assert.equal(r.body.points_redeemed, 100);
+  assert.equal(r.body.discount_paise, 9900);
+  const net = 24900 - 9900;
   assert.equal(r.body.total_paise, net + 2 * roundHalfUp(net * 0.025));
-  assert.equal((await get(`/api/customers/${phone}`)).body.points_balance, 164 - 150 + r.body.points_earned);
+  assert.deepEqual((await get(`/api/orders/${r.body.id}/bill`)).body.reward_notes, ['Loyalty: 100 pts redeemed']);
+  assert.equal((await get(`/api/customers/${phone}`)).body.points_balance, 100 - 100 + r.body.points_earned);
 });
 
 test('bill: reconciles GST and 404s for unknown orders', async () => {
@@ -351,13 +359,13 @@ test('discounts: 10% off and a manual discount are actually applied to the saved
   // stacks with a loyalty redemption too
   const phone = '9666666666';
   await post('/api/customers', { phone, first_name: 'Discounty' });
-  for (let i = 0; i < 4; i++) await order([{ menu_item_id: 'WL-24', quantity: 1 }], { phone }); // -> 164 pts
+  for (let i = 0; i < 5; i++) await order([{ menu_item_id: 'WL-24', quantity: 1 }], { phone }); // 5 x 20 = 100 pts
   const items = [{ menu_item_id: 'WL-17', quantity: 1 }, { menu_item_id: 'WL-21', quantity: 1 }];
-  const stacked = await order(items, { phone, redeem: { menu_item_id: 'WL-17' }, ten_percent_off: true });
+  const stacked = await order(items, { phone, redeem: true, ten_percent_off: true });
   assert.equal(stacked.status, 201);
   const stackedSubtotal = 9900 + 24900;
-  assert.equal(stacked.body.discount_paise, 9900 + Math.round(stackedSubtotal * 0.1)); // free item + 10% of the whole subtotal
-  assert.equal(stacked.body.points_redeemed, 150);
+  assert.equal(stacked.body.discount_paise, 9900 + Math.round(stackedSubtotal * 0.1)); // ₹99 off + 10% of the whole subtotal
+  assert.equal(stacked.body.points_redeemed, 100);
 
   // a huge discount is clamped, never a negative total
   const wiped = await order(line, { manual_discount_paise: 999999 });
@@ -387,7 +395,7 @@ test('admin: summary, orders list, customers and per-customer history', async ()
   const meera = customers.find((c) => c.phone === '9444444444');
   const hist = (await get(`/api/admin/customers/${meera.id}/orders`)).body;
   assert.equal(hist.customer.first_name, 'Meera');
-  assert.equal(hist.orders.length, 5); // 4 bulker orders + the redemption order
+  assert.equal(hist.orders.length, 7); // 2 small + 4 bulker orders + the redemption order
   assert.ok(hist.orders.every((o) => o.items.length >= 1));
   const other = customers.find((c) => c.phone === '9333333333');
   const otherHist = (await get(`/api/admin/customers/${other.id}/orders`)).body;

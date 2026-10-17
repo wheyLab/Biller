@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { getDb, nextOrderNumber, allConfig } from '../lib/db.js';
 import { computeOrderTotals, splitExclusive } from '../lib/money.js';
-import { loyaltySettings, pointsEarned, canRedeem, isRedeemable } from '../lib/loyalty.js';
+import { loyaltySettings, pointsEarned, canRedeem } from '../lib/loyalty.js';
 import { normalizeUsername, isValidUsername } from '../lib/username.js';
 import { GAME_RULES, computeReward, computeOffers, customerKey, istDay, pendingStoryCredit } from '../lib/game.js';
 import {
@@ -168,8 +168,10 @@ router.post('/', (req, res) => {
     const s = loyaltySettings(db);
     const subtotalPaise = lines.reduce((sum, l) => sum + l.unit_price_paise * l.quantity, 0);
 
-    // Resolve redemption (optional). One free shake of an eligible tier.
+    // Resolve redemption (optional): spend the threshold (100 pts) for a flat
+    // amount (₹99) off any drink.
     let discountPaise = 0;
+    let redeemDiscountPaise = 0;
     let pointsRedeemed = 0;
     // Flat/percentage discounts stack with redemption; computeOrderTotals()
     // below clamps the combined total so it can never take the order negative.
@@ -181,18 +183,13 @@ router.post('/', (req, res) => {
     } else if (username) {
       customer = db.prepare('SELECT * FROM customers WHERE username = ? COLLATE NOCASE').get(username);
     }
-    if (redeem && redeem.menu_item_id) {
+    if (redeem) {
       if (!customer || !canRedeem(customer.points_balance, s.redeemThreshold)) {
         return res.status(400).json({ error: 'Not enough points to redeem.' });
       }
-      const target = lines.find((l) => l.menu_item_id === redeem.menu_item_id);
-      if (!target) {
-        return res.status(400).json({ error: 'Redeemed item is not in the order.' });
-      }
-      if (!isRedeemable(target.tier, s.eligibleTiers)) {
-        return res.status(400).json({ error: 'That item is not eligible for redemption.' });
-      }
-      discountPaise += target.unit_price_paise; // one free unit, on top of any other discount
+      // Never worth more than the dearest drink in the order.
+      redeemDiscountPaise = Math.min(s.redeemValuePaise, Math.max(...lines.map((l) => l.unit_price_paise)));
+      discountPaise += redeemDiscountPaise;
       pointsRedeemed = s.redeemThreshold;
     }
 
@@ -220,6 +217,13 @@ router.post('/', (req, res) => {
     // Pushup challenge, applied by staff.
     const offerResult = computeOffers(offers, lines);
     if (offerResult.error) return res.status(400).json({ error: offerResult.error });
+    if (pointsRedeemed > 0) {
+      offerResult.notes.unshift({
+        kind: 'points',
+        note: `Loyalty: ${pointsRedeemed} pts redeemed`,
+        discount_paise: redeemDiscountPaise,
+      });
+    }
     discountPaise += offerResult.discount_paise;
 
     // Story challenge: confirming a story today banks 10% off the customer's
@@ -254,7 +258,7 @@ router.post('/', (req, res) => {
       lines.map((l) => ({ unit_price_paise: l.unit_price_paise, quantity: l.quantity })),
       discountPaise
     );
-    const earned = pointsEarned(totals.total_paise, s.earnPaisePerPoint);
+    const earned = pointsEarned(totals.total_paise, s.earnPaisePerPoint, s.maxPointsPerOrder);
     const now = new Date().toISOString();
 
     const tx = db.transaction(() => {

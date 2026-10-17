@@ -20,6 +20,7 @@ export interface CustomerLookup {
   points_balance: number;
   can_redeem: boolean;
   redeem_threshold: number;
+  redeem_value_paise?: number;
   eligible_tiers?: string[];
 }
 
