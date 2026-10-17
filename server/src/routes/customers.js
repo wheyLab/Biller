@@ -23,6 +23,7 @@ function shapeCustomer(row, db) {
       points_balance: 0,
       can_redeem: false,
       redeem_threshold: s.redeemThreshold,
+      redeem_value_paise: s.redeemValuePaise,
     };
   }
   return {
@@ -32,6 +33,7 @@ function shapeCustomer(row, db) {
     points_balance: row.points_balance,
     can_redeem: canRedeem(row.points_balance, s.redeemThreshold),
     redeem_threshold: s.redeemThreshold,
+    redeem_value_paise: s.redeemValuePaise,
     eligible_tiers: s.eligibleTiers,
   };
 }
@@ -49,6 +51,29 @@ router.get('/username/check/:username', (req, res) => {
 router.get('/username/suggest', (req, res) => {
   const name = String(req.query.name || '');
   res.json({ suggestions: suggestUsernames(db, name) });
+});
+
+// Live search while typing a name or number on the unified checkout customer
+// picker. Unlike the single-identifier lookup below (a check against one
+// guess, deliberately silent about who else exists), this is an explicit
+// staff-facing browse — it returns a short list of candidates with enough to
+// tell same-name customers apart, so returning phone/username here is fine.
+router.get('/search', (req, res) => {
+  const q = String(req.query.q || '').trim();
+  if (q.length < 2) return res.json({ customers: [] });
+  const contains = `%${q}%`;
+  const prefix = `${q}%`;
+  const rows = db
+    .prepare(
+      `SELECT phone, username, first_name, points_balance FROM customers
+       WHERE first_name LIKE ? COLLATE NOCASE
+          OR username LIKE ? COLLATE NOCASE
+          OR phone LIKE ?
+       ORDER BY first_name LIKE ? COLLATE NOCASE DESC, first_name COLLATE NOCASE
+       LIMIT 8`
+    )
+    .all(contains, contains, prefix, prefix);
+  res.json({ customers: rows });
 });
 
 // Lookup a single customer by phone (10 digits) or username. Returns ONLY that

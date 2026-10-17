@@ -20,6 +20,7 @@ export interface CustomerLookup {
   points_balance: number;
   can_redeem: boolean;
   redeem_threshold: number;
+  redeem_value_paise?: number;
   eligible_tiers?: string[];
 }
 
@@ -27,6 +28,17 @@ export interface CustomerLookup {
 export interface CustomerIdentity {
   phone: string | null;
   username: string | null;
+}
+
+// One row from the live name/number search while checking out — unlike
+// CustomerLookup (one identifier, no contact info returned), this is an
+// explicit staff-facing browse, so it does carry phone/username, to tell
+// same-name customers apart.
+export interface CustomerSuggestion {
+  phone: string | null;
+  username: string | null;
+  first_name: string | null;
+  points_balance: number;
 }
 
 export type ProteinType = 'whey' | 'yeast' | 'plant';
@@ -129,6 +141,8 @@ async function req<T>(url: string, init?: RequestInit): Promise<T> {
 export const api = {
   menu: () => req<{ items: MenuItem[] }>('/api/menu'),
   lookup: (identifier: string) => req<CustomerLookup>(`/api/customers/${encodeURIComponent(identifier)}`),
+  searchCustomers: (q: string) =>
+    req<{ customers: CustomerSuggestion[] }>(`/api/customers/search?q=${encodeURIComponent(q)}`),
   registerCustomer: (identity: CustomerIdentity, first_name: string) =>
     req<CustomerLookup>('/api/customers', {
       method: 'POST',

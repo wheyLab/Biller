@@ -7,12 +7,13 @@ import { homedir } from 'node:os';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // DB lives OUTSIDE the repo so it is never committed and survives a re-clone.
-// Override with WHEYLAB_DB for a custom location (e.g. a mounted drive).
+// Override with WHEYLAB_DB for a custom location (e.g. a mounted drive, or a
+// separate test DB — see start-test.cmd). The parent directory is created
+// either way, so an override pointing somewhere new doesn't need to exist yet.
 export function dbPath() {
-  if (process.env.WHEYLAB_DB) return process.env.WHEYLAB_DB;
-  const dir = join(homedir(), '.wheylab');
-  mkdirSync(dir, { recursive: true });
-  return join(dir, 'wheylab.sqlite');
+  const path = process.env.WHEYLAB_DB || join(homedir(), '.wheylab', 'wheylab.sqlite');
+  mkdirSync(dirname(path), { recursive: true });
+  return path;
 }
 
 // CREATE TABLE IF NOT EXISTS never retrofits new columns onto a table that
