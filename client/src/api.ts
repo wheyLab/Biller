@@ -99,6 +99,21 @@ export interface OrderResult {
   total_paise: number;
   points_earned: number;
   points_redeemed: number;
+  reward_notes: string[];
+}
+
+export interface StoryCredit {
+  pending: boolean;
+  usable_today: boolean;
+  earned_day: string | null;
+}
+
+export interface SpinResult {
+  spin_id: number;
+  challenge_key: string;
+  slice_index: number;
+  already_spun: boolean;
+  already_used: boolean;
 }
 
 async function req<T>(url: string, init?: RequestInit): Promise<T> {
@@ -127,6 +142,14 @@ export const api = {
     req<OrderResult>('/api/orders', { method: 'POST', body: JSON.stringify(body) }),
   bill: (id: number) => req<Record<string, unknown>>(`/api/orders/${id}/bill`),
   protein: () => req<ProteinData>('/api/protein'),
+  storyCredit: (identity: CustomerIdentity) =>
+    req<StoryCredit>(
+      `/api/game/story-credit?${new URLSearchParams(
+        identity.phone ? { phone: identity.phone } : { username: identity.username || '' }
+      )}`
+    ),
+  spinWheel: (identity: CustomerIdentity) =>
+    req<SpinResult>('/api/game/spin', { method: 'POST', body: JSON.stringify(identity) }),
   // admin
   stock: () => req<any>('/api/admin/stock'),
   createStockBrand: (body: unknown) =>

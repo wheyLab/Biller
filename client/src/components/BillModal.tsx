@@ -160,6 +160,12 @@ export function BillModal({ orderId, onClose }: { orderId: number; onClose: () =
                 <Dashes />
 
                 {bill.discount_paise > 0 && <Row l="Discount" v={`-${rupees(bill.discount_paise)}`} />}
+                {(bill.reward_lines ?? []).map((r: { note: string; discount_paise: number }) => (
+                  <div key={r.note} className="flex justify-between gap-2 font-bold">
+                    <span>{r.note}</span>
+                    <span className="shrink-0">{r.discount_paise > 0 ? `-${rupees(r.discount_paise)}` : ''}</span>
+                  </div>
+                ))}
                 <Row l="Subtotal" v={rupees(bill.taxable_paise)} />
                 <Row l="CGST 2.5%" v={rupees(bill.cgst_paise)} />
                 <Row l="SGST 2.5%" v={rupees(bill.sgst_paise)} />

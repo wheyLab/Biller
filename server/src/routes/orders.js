@@ -3,6 +3,7 @@ import { getDb, nextOrderNumber, allConfig } from '../lib/db.js';
 import { computeOrderTotals, splitExclusive } from '../lib/money.js';
 import { loyaltySettings, pointsEarned, canRedeem, isRedeemable } from '../lib/loyalty.js';
 import { normalizeUsername, isValidUsername } from '../lib/username.js';
+import { GAME_RULES, computeReward, computeOffers, customerKey, istDay, pendingStoryCredit } from '../lib/game.js';
 import {
   getBrand,
   getAmountOption,
@@ -22,12 +23,16 @@ const PAYMENTS = new Set(['cash', 'upi', 'card']);
 const MAX_QTY_PER_ITEM = 99; // a fat-finger / bad-request guard, far above any real order
 const MAX_ADDONS_PER_LINE = 10; // a bad-request guard; the real menu only has 4
 
+// Thrown inside the order transaction when a wheel reward was already used
+// (e.g. two tills completing at once); turned into a plain 400.
+class GameRewardUsedError extends Error {}
+
 // Create an order. Everything below runs in a single transaction so a crash
 // mid-order leaves earlier completed orders intact and burns no order number.
 router.post('/', (req, res) => {
   try {
     const body = req.body || {};
-    const { items, payment_method, phone, username: rawUsername, first_name, redeem, ten_percent_off, manual_discount_paise } = body;
+    const { items, payment_method, phone, username: rawUsername, first_name, redeem, ten_percent_off, manual_discount_paise, game, offers, story_tag, use_story_credit } = body;
 
     if (!Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ error: 'Add at least one item.' });
@@ -150,6 +155,7 @@ router.post('/', (req, res) => {
         unit_price_paise: mi.price_paise + proteinAddonPaise + addonsPaise + (milk?.price_paise || 0),
         tier: mi.tier,
         quantity: qty,
+        addon_prices_paise: addons.map((a) => a.price_paise),
         protein_brand_id: proteinBrandId,
         protein_grams: proteinGrams,
         protein_powder_mg: proteinPowderMg,
@@ -188,6 +194,60 @@ router.post('/', (req, res) => {
       }
       discountPaise += target.unit_price_paise; // one free unit, on top of any other discount
       pointsRedeemed = s.redeemThreshold;
+    }
+
+    // Spin-the-wheel reward (optional): the spin must be this customer's, from
+    // today, and not used yet. The reward is recomputed here from the real lines.
+    let gameSpin = null;
+    let gameReward = null;
+    if (game && game.spin_id != null) {
+      gameSpin = db.prepare('SELECT * FROM game_spins WHERE id = ?').get(Number(game.spin_id));
+      if (
+        !gameSpin ||
+        gameSpin.customer_key !== customerKey(phone, username) ||
+        gameSpin.spin_day !== istDay()
+      ) {
+        return res.status(400).json({ error: 'That wheel spin is not for this customer today.' });
+      }
+      if (gameSpin.order_id != null) {
+        return res.status(400).json({ error: 'This wheel reward has already been used.' });
+      }
+      gameReward = computeReward(gameSpin.challenge_key, lines);
+      if (gameReward.error) return res.status(400).json({ error: gameReward.error });
+      discountPaise += gameReward.discount_paise;
+    }
+
+    // Pushup challenge, applied by staff.
+    const offerResult = computeOffers(offers, lines);
+    if (offerResult.error) return res.status(400).json({ error: offerResult.error });
+    discountPaise += offerResult.discount_paise;
+
+    // Story challenge: confirming a story today banks 10% off the customer's
+    // next visit; a reward banked on an earlier day is used on this order.
+    if ((story_tag || use_story_credit) && !phone && !username) {
+      return res.status(400).json({ error: 'The story challenge needs the customer’s number or username.' });
+    }
+    const pendingStory = pendingStoryCredit(db, customer?.id);
+    let usedStory = null;
+    if (use_story_credit) {
+      if (!pendingStory || !pendingStory.usable_today) {
+        return res.status(400).json({ error: 'No story reward to use today.' });
+      }
+      usedStory = pendingStory;
+      const d = Math.round((subtotalPaise * GAME_RULES.storyNextVisitPercent) / 100);
+      discountPaise += d;
+      offerResult.notes.push({ kind: 'story_reward', note: `Story reward: ${GAME_RULES.storyNextVisitPercent}% off`, discount_paise: d });
+    }
+    // No stacking: a customer who still has an unused reward doesn't bank a second one.
+    const earnStory = !!story_tag && (!pendingStory || !!usedStory);
+    if (story_tag) {
+      offerResult.notes.push({
+        kind: 'story_tag',
+        note: earnStory
+          ? `Story tag confirmed: ${GAME_RULES.storyNextVisitPercent}% off next visit`
+          : 'Story tag confirmed (reward already waiting)',
+        discount_paise: 0,
+      });
     }
 
     const totals = computeOrderTotals(
@@ -270,12 +330,48 @@ router.post('/', (req, res) => {
         db.prepare('UPDATE customers SET points_balance = ? WHERE id = ?').run(bal, customerId);
       }
 
+      if (gameSpin) {
+        const used = db
+          .prepare(
+            'UPDATE game_spins SET order_id = ?, reward_note = ?, discount_paise = ? WHERE id = ? AND order_id IS NULL'
+          )
+          .run(orderId, gameReward.note, gameReward.discount_paise, gameSpin.id);
+        if (used.changes !== 1) throw new GameRewardUsedError();
+      }
+
+      if (usedStory) {
+        const used = db
+          .prepare('UPDATE story_credits SET used_order_id = ?, used_at = ? WHERE id = ? AND used_order_id IS NULL')
+          .run(orderId, now, usedStory.id);
+        if (used.changes !== 1) throw new GameRewardUsedError();
+      }
+      if (earnStory) {
+        db.prepare(
+          'INSERT INTO story_credits (customer_id, earned_order_id, earned_day, created_at) VALUES (?, ?, ?, ?)'
+        ).run(customerId, orderId, istDay(), now);
+      }
+
+      const insOffer = db.prepare(
+        'INSERT INTO order_offers (order_id, kind, note, discount_paise) VALUES (?, ?, ?, ?)'
+      );
+      for (const o of offerResult.notes) insOffer.run(orderId, o.kind, o.note, o.discount_paise);
+
       return { orderId, orderNumber };
     });
 
     const { orderId, orderNumber } = tx();
-    res.status(201).json({ id: orderId, order_number: orderNumber, ...totals, points_earned: earned, points_redeemed: pointsRedeemed });
+    res.status(201).json({
+      id: orderId,
+      order_number: orderNumber,
+      ...totals,
+      points_earned: earned,
+      points_redeemed: pointsRedeemed,
+      reward_notes: [...(gameReward ? [gameReward.note] : []), ...offerResult.notes.map((o) => o.note)],
+    });
   } catch (err) {
+    if (err instanceof GameRewardUsedError) {
+      return res.status(400).json({ error: 'This reward has already been used.' });
+    }
     // Plain sentence only. Never expose SQL, paths, or stack traces on the counter.
     console.error('order create failed:', err);
     res.status(500).json({ error: 'Could not save the order. Try again.' });
@@ -290,6 +386,12 @@ router.get('/:id/bill', (req, res) => {
   const items = db.prepare('SELECT * FROM order_items WHERE order_id = ?').all(order.id);
   const split = splitExclusive(order.subtotal_paise - order.discount_paise);
   const cfg = allConfig(db);
+  const spin = db.prepare('SELECT reward_note, discount_paise FROM game_spins WHERE order_id = ?').get(order.id);
+  const offerNotes = db.prepare('SELECT note, discount_paise FROM order_offers WHERE order_id = ? ORDER BY id').all(order.id);
+  const rewardLines = [
+    ...(spin ? [{ note: spin.reward_note, discount_paise: spin.discount_paise }] : []),
+    ...offerNotes.map((o) => ({ note: o.note, discount_paise: o.discount_paise })),
+  ];
   res.json({
     order_number: order.order_number,
     created_at: order.created_at,
@@ -313,6 +415,8 @@ router.get('/:id/bill', (req, res) => {
     payment_method: order.payment_method,
     points_earned: order.points_earned,
     points_redeemed: order.points_redeemed,
+    reward_notes: rewardLines.map((r) => r.note),
+    reward_lines: rewardLines,
   });
 });
 

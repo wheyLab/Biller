@@ -154,6 +154,47 @@ CREATE TABLE IF NOT EXISTS counters (
   value INTEGER NOT NULL
 );
 
+-- Spin-the-wheel counter game: one spin per customer per IST day. The slice
+-- is picked server-side; order_id is set when the reward is used on an order.
+CREATE TABLE IF NOT EXISTS game_spins (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  customer_key   TEXT NOT NULL,             -- 'p:<phone>' or 'u:<username>'
+  spin_day       TEXT NOT NULL,             -- YYYY-MM-DD in IST
+  challenge_key  TEXT NOT NULL,
+  created_at     TEXT NOT NULL,
+  order_id       INTEGER REFERENCES orders(id),
+  reward_note    TEXT,
+  discount_paise INTEGER NOT NULL DEFAULT 0,
+  UNIQUE (customer_key, spin_day)
+);
+
+CREATE INDEX IF NOT EXISTS idx_game_spins_order ON game_spins(order_id);
+
+-- Always-on challenge offers applied to an order (pushups, Instagram story tag),
+-- kept so the bill can say why it was discounted.
+CREATE TABLE IF NOT EXISTS order_offers (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  order_id       INTEGER NOT NULL REFERENCES orders(id),
+  kind           TEXT NOT NULL,             -- 'pushups' | 'story_tag'
+  note           TEXT NOT NULL,
+  discount_paise INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_order_offers_order ON order_offers(order_id);
+
+-- Story challenge: a confirmed Instagram story banks one reward (10% off) for
+-- the customer's NEXT visit on a later IST day. One unused reward at a time.
+CREATE TABLE IF NOT EXISTS story_credits (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  customer_id     INTEGER NOT NULL REFERENCES customers(id),
+  earned_order_id INTEGER NOT NULL REFERENCES orders(id),
+  earned_day      TEXT NOT NULL,            -- YYYY-MM-DD in IST
+  created_at      TEXT NOT NULL,
+  used_order_id   INTEGER REFERENCES orders(id),
+  used_at         TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_story_credits_customer ON story_credits(customer_id);
 CREATE INDEX IF NOT EXISTS idx_order_items_order ON order_items(order_id);
 CREATE INDEX IF NOT EXISTS idx_ledger_customer ON loyalty_ledger(customer_id);
 CREATE INDEX IF NOT EXISTS idx_orders_created ON orders(created_at);

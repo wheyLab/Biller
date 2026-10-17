@@ -8,6 +8,7 @@ import customers from './routes/customers.js';
 import orders from './routes/orders.js';
 import admin from './routes/admin.js';
 import protein from './routes/protein.js';
+import game from './routes/game.js';
 
 // A kiosk server should stay up. Without these, an uncaught error anywhere
 // (a stray socket error, a rejected promise with no .catch) crashes the whole
@@ -38,6 +39,7 @@ app.use('/api/customers', customers);
 app.use('/api/orders', orders);
 app.use('/api/admin', admin);
 app.use('/api/protein', protein);
+app.use('/api/game', game);
 
 // Serve the built client (single static bundle). In dev, Vite serves the client
 // separately and proxies /api here.

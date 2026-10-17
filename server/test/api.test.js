@@ -626,3 +626,127 @@ test('migration: a database from before protein stock / menu-card fields upgrade
     p2.kill();
   }
 });
+
+// ------------------------------------------------------- spin the wheel
+// Spins as a customer, then forces the slice so each reward can be tested.
+async function spinAs(phone, challengeKey) {
+  const r = await post('/api/game/spin', { phone });
+  assert.equal(r.status, 200);
+  const db = new Database(dbFile);
+  db.prepare('UPDATE game_spins SET challenge_key = ? WHERE id = ?').run(challengeKey, r.body.spin_id);
+  db.close();
+  return r.body.spin_id;
+}
+
+test('wheel: needs a customer, and re-spinning the same day returns the same slice', async () => {
+  assert.equal((await post('/api/game/spin', {})).status, 400);
+  assert.equal((await post('/api/game/spin', { phone: '123' })).status, 400);
+  const a = await post('/api/game/spin', { phone: '9300000001' });
+  assert.equal(a.status, 200);
+  assert.equal(a.body.already_spun, false);
+  assert.ok(a.body.slice_index >= 0 && a.body.slice_index < 7);
+  const b = await post('/api/game/spin', { phone: '9300000001' });
+  assert.equal(b.body.already_spun, true);
+  assert.equal(b.body.spin_id, a.body.spin_id);
+  assert.equal(b.body.challenge_key, a.body.challenge_key);
+  const u = await post('/api/game/spin', { username: 'Wheel.Fan' });
+  assert.equal(u.status, 200);
+});
+
+test('wheel: a flat reward applies once, only for the customer who spun', async () => {
+  const spin = await spinAs('9300000002', 'bottleFlip');
+  const items = [{ menu_item_id: 'WL-21', quantity: 1 }];
+  assert.equal((await order(items, { phone: '9300000003', game: { spin_id: spin } })).status, 400);
+  const r = await order(items, { phone: '9300000002', game: { spin_id: spin } });
+  assert.equal(r.status, 201);
+  assert.equal(r.body.discount_paise, 3000);
+  assert.equal(r.body.taxable_paise, 24900 - 3000);
+  assert.deepEqual(r.body.reward_notes, ['Wheel: bottle flip']);
+  assert.deepEqual((await get(`/api/orders/${r.body.id}/bill`)).body.reward_notes, ['Wheel: bottle flip']);
+  const again = await order(items, { phone: '9300000002', game: { spin_id: spin } });
+  assert.equal(again.status, 400);
+});
+
+test('offers: pushups need a Signature and cap at ₹100, and show on the bill', async () => {
+  assert.equal((await order([{ menu_item_id: 'WL-17', quantity: 1 }], { offers: { pushups: 20 } })).status, 400);
+  assert.equal((await order([{ menu_item_id: 'WL-21', quantity: 1 }], { offers: { pushups: 0 } })).status, 400);
+  const capped = await order([{ menu_item_id: 'WL-21', quantity: 1 }], { offers: { pushups: 250 } });
+  assert.equal(capped.status, 201);
+  assert.equal(capped.body.discount_paise, 10000);
+  const p = await order([{ menu_item_id: 'WL-21', quantity: 1 }], { offers: { pushups: 42 } });
+  assert.equal(p.status, 201);
+  assert.equal(p.body.discount_paise, 4200);
+  assert.deepEqual((await get(`/api/orders/${p.body.id}/bill`)).body.reward_notes, ['Pushup challenge: 42 pushups']);
+});
+
+test('story: a confirmed story banks 10% off the next visit, usable only on a later day, once', async () => {
+  const phone = '9300000020';
+  const items = [{ menu_item_id: 'WL-21', quantity: 1 }];
+  assert.equal((await order(items, { story_tag: true })).status, 400); // walk-in: nobody to bank it for
+  const first = await order(items, { phone, story_tag: true });
+  assert.equal(first.status, 201);
+  assert.equal(first.body.discount_paise, 0); // nothing off today
+  assert.deepEqual(first.body.reward_notes, ['Story tag confirmed: 10% off next visit']);
+  let c = (await get(`/api/game/story-credit?phone=${phone}`)).body;
+  assert.deepEqual(c, { pending: true, usable_today: false, earned_day: c.earned_day });
+  assert.equal((await order(items, { phone, use_story_credit: true })).status, 400); // same day
+  const again = await order(items, { phone, story_tag: true }); // no stacking
+  assert.deepEqual(again.body.reward_notes, ['Story tag confirmed (reward already waiting)']);
+
+  // Pretend the reward was earned yesterday.
+  const db = new Database(dbFile);
+  db.prepare("UPDATE story_credits SET earned_day = '2000-01-01' WHERE used_order_id IS NULL").run();
+  db.close();
+  assert.equal((await get(`/api/game/story-credit?phone=${phone}`)).body.usable_today, true);
+  const next = await order(items, { phone, use_story_credit: true, story_tag: true });
+  assert.equal(next.status, 201);
+  assert.equal(next.body.discount_paise, Math.round(24900 * 0.1));
+  assert.deepEqual(next.body.reward_notes, ['Story reward: 10% off', 'Story tag confirmed: 10% off next visit']);
+  c = (await get(`/api/game/story-credit?phone=${phone}`)).body;
+  assert.equal(c.pending, true); // the new one from this visit
+  assert.equal(c.usable_today, false);
+  assert.equal((await order(items, { phone, use_story_credit: true })).status, 400); // old one is spent
+});
+
+test('wheel: weight guess is 20% off, reaction ₹20, quiz ₹30; offers stack with the wheel', async () => {
+  const w = await spinAs('9300000007', 'weightGuess');
+  const r = await order([{ menu_item_id: 'WL-21', quantity: 2 }], { phone: '9300000007', game: { spin_id: w }, offers: { pushups: 30 } });
+  assert.equal(r.status, 201);
+  assert.equal(r.body.discount_paise, Math.round(49800 * 0.2) + 3000);
+  assert.deepEqual(r.body.reward_notes, ['Wheel: weight guess 20% off', 'Pushup challenge: 30 pushups']);
+  const re = await spinAs('9300000008', 'reaction');
+  assert.equal((await order([{ menu_item_id: 'WL-21', quantity: 1 }], { phone: '9300000008', game: { spin_id: re } })).body.discount_paise, 2000);
+  const q = await spinAs('9300000009', 'proteinQuiz');
+  assert.equal((await order([{ menu_item_id: 'WL-21', quantity: 1 }], { phone: '9300000009', game: { spin_id: q } })).body.discount_paise, 3000);
+});
+
+test('wheel: an unused spin on a game since removed from the wheel gets a new slice', async () => {
+  const id = await spinAs('9300000010', 'grip');
+  const again = await post('/api/game/spin', { phone: '9300000010' });
+  assert.equal(again.body.spin_id, id);
+  assert.notEqual(again.body.challenge_key, 'grip');
+  assert.ok(again.body.slice_index >= 0);
+});
+
+test('wheel: plank makes the dearest add-on free; ₹555 combo frees the cheapest Originals', async () => {
+  const plank = await spinAs('9300000005', 'plank');
+  assert.equal((await order([{ menu_item_id: 'WL-21', quantity: 1 }], { phone: '9300000005', game: { spin_id: plank } })).status, 400);
+  const p = await order(
+    [{ menu_item_id: 'WL-21', quantity: 1, addon_ids: ['chia', 'coffeeshot'] }],
+    { phone: '9300000005', game: { spin_id: plank } }
+  );
+  assert.equal(p.status, 201);
+  assert.equal(p.body.discount_paise, 3000);
+
+  const combo = await spinAs('9300000006', 'originals555');
+  assert.equal(
+    (await order([{ menu_item_id: 'WL-17', quantity: 1 }, { menu_item_id: 'WL-21', quantity: 1 }], { phone: '9300000006', game: { spin_id: combo } })).status,
+    400
+  );
+  const c = await order(
+    [{ menu_item_id: 'WL-17', quantity: 1 }, { menu_item_id: 'WL-24', quantity: 1 }, { menu_item_id: 'WL-25', quantity: 1 }],
+    { phone: '9300000006', game: { spin_id: combo } }
+  );
+  assert.equal(c.status, 201);
+  assert.equal(c.body.discount_paise, 9900);
+});
