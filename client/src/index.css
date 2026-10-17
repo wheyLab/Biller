@@ -59,6 +59,10 @@ body {
 }
 .animate-land { animation: land 120ms ease-out; }
 
+/* Screensaver slides cross in from black. */
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+.animate-fade { animation: fade 700ms ease-out both; }
+
 /* The bill "prints out" of a slot: paper feeds up from fully hidden, leaning
    in 3D like it's just peeled off a roll, overshoots, then settles with a
    mechanical bounce. A growing shadow underneath sells the lift off the page.

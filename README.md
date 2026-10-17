@@ -31,6 +31,25 @@ shortcut to the file in `shell:startup` to launch it when the laptop boots.
 The menu is drawn on a fixed 1920-wide canvas and scaled to whatever screen it
 runs on, so it looks the same everywhere and never reflows when the cart opens.
 
+## Screensaver (offers, reels, pushup board)
+
+After **1 minute** with nobody touching the menu and **an empty cart**, the
+screen plays a loop: pushup board → offer → pushup board → reel → … A tap
+anywhere (or any key) goes straight back to the menu; that tap never orders
+anything. It never starts mid-order (cart has items, or on the customer/pay
+screens).
+
+- Put offer images (`.jpg .png .webp .gif`) and reels (`.mp4 .webm .mov`) in
+  **Documents\Whey Lab Screensaver**. They play in file-name order, so name
+  them `01-…`, `02-…` to set the order. Add or remove files any time; the
+  next loop picks them up. Images show 8 s; reels play to the end, muted.
+- The pushup board comes from the separate pushup-challenge app
+  (http://127.0.0.1:4180). `start-kiosk.cmd` starts it if that app sits next
+  to this folder (`..\pushup-challenge`). If it isn't running, the screensaver
+  skips the board.
+- Overrides: `SCREENSAVER_DIR` (media folder), `SCREENSAVER_IDLE_SECONDS`
+  (default 60), `PUSHUP_BOARD_URL`, `PUSHUP_DIR` (for the launcher).
+
 ## Data & backup
 
 - The SQLite file lives **outside the repo** at `~/.wheylab/wheylab.sqlite`

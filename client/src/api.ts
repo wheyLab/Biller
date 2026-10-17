@@ -138,7 +138,20 @@ async function req<T>(url: string, init?: RequestInit): Promise<T> {
   return data as T;
 }
 
+export interface ScreensaverMedia {
+  type: 'image' | 'video';
+  name: string;
+  url: string;
+}
+
+export interface ScreensaverConfig {
+  idle_seconds: number;
+  pushup_board_url: string;
+  media: ScreensaverMedia[];
+}
+
 export const api = {
+  screensaver: () => req<ScreensaverConfig>('/api/screensaver'),
   menu: () => req<{ items: MenuItem[] }>('/api/menu'),
   lookup: (identifier: string) => req<CustomerLookup>(`/api/customers/${encodeURIComponent(identifier)}`),
   searchCustomers: (q: string) =>
