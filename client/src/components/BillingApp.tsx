@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import type { MenuItem, OrderResult, CustomerLookup, CustomerIdentity, ProteinData } from '../api';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { MenuItem, OrderResult, CustomerLookup, CustomerIdentity, CustomerSuggestion, ProteinData } from '../api';
 import { api } from '../api';
 import { ticket, useTicket } from '../store/ticket';
 import { FitCanvas } from './FitCanvas';
@@ -8,8 +8,8 @@ import { ProteinPoster } from './ProteinPoster';
 import { TicketRail } from './TicketRail';
 import { BillModal } from './BillModal';
 
-// menu (full-screen, opens here) -> choose customer -> new/existing -> pay
-type Phase = 'menu' | 'choose' | 'new' | 'existing' | 'pay';
+// menu (full-screen, opens here) -> customer (search existing or add new) -> pay
+type Phase = 'menu' | 'customer' | 'pay';
 const HOTKEY_SEQUENCE = '123456789qwertyuasdfgh'.split('');
 const NO_IDENTITY: CustomerIdentity = { phone: null, username: null };
 
@@ -26,7 +26,6 @@ export function BillingApp() {
   const [phase, setPhase] = useState<Phase>('menu');
   const [identity, setIdentity] = useState<CustomerIdentity>(NO_IDENTITY);
   const [customer, setCustomer] = useState<CustomerLookup | null>(null);
-  const [prefill, setPrefill] = useState<CustomerIdentity>(NO_IDENTITY);
   const [items, setItems] = useState<MenuItem[]>([]);
   const [completed, setCompleted] = useState<OrderResult | null>(null);
   const [protein, setProtein] = useState<ProteinData | null>(null);
@@ -115,7 +114,6 @@ export function BillingApp() {
   function backToMenu() {
     setIdentity(NO_IDENTITY);
     setCustomer(null);
-    setPrefill(NO_IDENTITY);
     setPhase('menu');
   }
 
@@ -144,61 +142,17 @@ export function BillingApp() {
     onComplete: setCompleted,
   };
 
-  if (phase === 'choose') {
+  if (phase === 'customer') {
     return (
       <Screen now={now} onBack={backToMenu}>
-        <div className="flex-1 flex flex-col items-center justify-center gap-6">
-          <h1 className="font-display text-4xl text-cream">New or returning?</h1>
-          <div className="flex gap-6">
-            <button
-              onClick={() => setPhase('new')}
-              className="w-64 py-12 border-2 border-cream/30 hover:border-red font-display text-3xl text-cream"
-            >
-              NEW<br />CUSTOMER
-            </button>
-            <button
-              onClick={() => setPhase('existing')}
-              className="w-64 py-12 border-2 border-cream/30 hover:border-red font-display text-3xl text-cream"
-            >
-              EXISTING<br />CUSTOMER
-            </button>
-          </div>
-          <button onClick={() => startOrder(NO_IDENTITY, null)} className="font-body text-sm text-cream/40 underline underline-offset-4">
-            Walk-in — no number
-          </button>
-        </div>
-      </Screen>
-    );
-  }
-
-  if (phase === 'new') {
-    return (
-      <Screen now={now} onBack={() => setPhase('choose')}>
-        <NewCustomer
-          prefill={prefill}
-          onCreated={(id, cust) => startOrder(id, cust)}
-        />
-      </Screen>
-    );
-  }
-
-  if (phase === 'existing') {
-    return (
-      <Screen now={now} onBack={() => setPhase('choose')}>
-        <ExistingCustomer
-          onStart={(id, cust) => startOrder(id, cust)}
-          onAddNew={(id) => {
-            setPrefill(id);
-            setPhase('new');
-          }}
-        />
+        <CustomerStep onStart={(id, cust) => startOrder(id, cust)} />
       </Screen>
     );
   }
 
   if (phase === 'pay') {
     return (
-      <Screen now={now} onBack={() => setPhase('choose')}>
+      <Screen now={now} onBack={() => setPhase('customer')}>
         <div className="flex-1 min-h-0 flex justify-center pt-4">
           <TicketRail {...railProps} stage="pay" className="w-full max-w-xl border-2 border-cream/15" />
         </div>
@@ -250,7 +204,7 @@ export function BillingApp() {
         >
           ▸
         </button>
-        <TicketRail {...railProps} stage="cart" className="w-full" onCheckout={() => setPhase('choose')} onClear={ticket.clear} />
+        <TicketRail {...railProps} stage="cart" className="w-full" onCheckout={() => setPhase('customer')} onClear={ticket.clear} />
       </aside>
 
       {hasItems && cartHidden && (
@@ -351,21 +305,67 @@ function UsernameStatus({ status, reason }: { status: string; reason: string }) 
   return null;
 }
 
-function NewCustomer({
-  prefill,
-  onCreated,
+// One unified screen replacing the old "new or returning?" fork: a single
+// search box with live suggestions as staff type a name or number, and — if
+// nothing matches — an always-visible "add as new" form right below it, fed
+// from whatever was already typed so nothing needs retyping.
+function CustomerStep({
+  onStart,
 }: {
-  prefill: CustomerIdentity;
-  onCreated: (identity: CustomerIdentity, c: CustomerLookup) => void;
+  onStart: (identity: CustomerIdentity, c: CustomerLookup | null) => void;
 }) {
-  const [mode, setMode] = useState<IdMode>(prefill.username ? 'username' : 'phone');
-  const [phone, setPhone] = useState(prefill.phone || '');
+  const [query, setQuery] = useState('');
+  const [suggestions, setSuggestions] = useState<CustomerSuggestion[]>([]);
+  const [searching, setSearching] = useState(false);
+
+  const [mode, setMode] = useState<IdMode>('phone');
+  const [phone, setPhone] = useState('');
   const [name, setName] = useState('');
-  const [suggestions, setSuggestions] = useState<string[]>([]);
-  const { username, setUsername, status: uStatus, reason: uReason } = useUsernameField(prefill.username || '');
-  const [usernameTouched, setUsernameTouched] = useState(!!prefill.username);
+  const [handleSuggestions, setHandleSuggestions] = useState<string[]>([]);
+  const { username, setUsername, status: uStatus, reason: uReason } = useUsernameField('');
+  const [usernameTouched, setUsernameTouched] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+
+  // Live search as the main box is typed into.
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < 2) {
+      setSuggestions([]);
+      setSearching(false);
+      return;
+    }
+    setSearching(true);
+    let cancelled = false;
+    const t = setTimeout(() => {
+      api
+        .searchCustomers(q)
+        .then((r) => !cancelled && setSuggestions(r.customers))
+        .catch(() => !cancelled && setSuggestions([]))
+        .finally(() => !cancelled && setSearching(false));
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [query]);
+
+  // Feed the search box into the "add as new" fields below, so if nothing
+  // matches, whatever was already typed doesn't need retyping: digits go to
+  // the number field, anything else is treated as the name. Only what the
+  // search itself put there is replaced, so clearing the search clears it
+  // again, while anything typed straight into those fields is left alone.
+  const mirrored = useRef({ name: '', phone: '' });
+  useEffect(() => {
+    const q = query.trim();
+    const digits = /^\d+$/.test(q);
+    const next = { name: q && !digits ? q : '', phone: digits ? q.slice(0, 10) : '' };
+    const prev = mirrored.current;
+    mirrored.current = next;
+    if (digits) setMode('phone');
+    setName((n) => (n === prev.name ? next.name : n));
+    setPhone((p) => (p === prev.phone ? next.phone : p));
+  }, [query]);
 
   // A "new" customer whose number is already registered isn't new — surface
   // the existing account instead of silently merging into it.
@@ -393,7 +393,7 @@ function NewCustomer({
     if (mode !== 'username') return;
     const n = name.trim();
     if (!n) {
-      setSuggestions([]);
+      setHandleSuggestions([]);
       return;
     }
     let cancelled = false;
@@ -402,7 +402,7 @@ function NewCustomer({
         .suggestUsernames(n)
         .then((r) => {
           if (cancelled) return;
-          setSuggestions(r.suggestions);
+          setHandleSuggestions(r.suggestions);
           if (!usernameTouched && r.suggestions.length) setUsername(r.suggestions[0]);
         })
         .catch(() => {});
@@ -414,21 +414,43 @@ function NewCustomer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [name, mode]);
 
+  // A suggestion only carries the fields the search endpoint exposes; do the
+  // full single-identifier lookup before starting so redemption eligibility
+  // (can_redeem, eligible_tiers) is correct, not just a guess.
+  function selectSuggestion(s: CustomerSuggestion) {
+    const identity: CustomerIdentity = s.phone
+      ? { phone: s.phone, username: null }
+      : { phone: null, username: s.username };
+    api
+      .lookup(s.phone || s.username || '')
+      .then((full) => onStart(identity, full))
+      .catch(() =>
+        onStart(identity, {
+          known: true,
+          first_name: s.first_name,
+          username: s.username,
+          points_balance: s.points_balance,
+          can_redeem: false,
+          redeem_threshold: 0,
+        })
+      );
+  }
+
   const isDuplicatePhone = mode === 'phone' && phone.length === 10 && !!phoneLookup;
-  const ready =
+  const readyToAdd =
     !isDuplicatePhone &&
     name.trim().length > 0 &&
     (mode === 'phone' ? phone.length === 10 : username.trim().length > 0 && uStatus === 'available');
 
-  async function create() {
-    if (!ready) return;
+  async function addNew() {
+    if (!readyToAdd) return;
     setBusy(true);
     setError('');
     try {
       const identity: CustomerIdentity =
         mode === 'phone' ? { phone, username: null } : { phone: null, username: username.trim() };
       const c = await api.registerCustomer(identity, name.trim());
-      onCreated(identity, c);
+      onStart(identity, c);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -436,193 +458,118 @@ function NewCustomer({
     }
   }
 
-  function useExisting() {
-    if (!phoneLookup) return;
-    onCreated({ phone, username: null }, phoneLookup);
-  }
+  const showSuggestions = query.trim().length >= 2;
 
   return (
     <div className="flex-1 flex flex-col items-center justify-center gap-4 w-full">
-      <h1 className="font-display text-4xl text-cream">New customer</h1>
+      <h1 className="font-display text-4xl text-cream">Who's this order for?</h1>
       <div className="w-96 flex flex-col gap-3">
-        <ModeTabs mode={mode} onChange={setMode} />
-
         <input
-          placeholder="First name"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
+          autoFocus
+          placeholder="Search name or number"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
           className="w-full bg-transparent border-2 border-cream/25 px-4 py-3 font-body text-xl text-cream placeholder:text-cream/30 focus:border-red outline-none"
         />
 
-        {mode === 'phone' ? (
-          <>
-            <input
-              autoFocus
-              inputMode="numeric"
-              placeholder="Mobile number (10 digits)"
-              value={phone}
-              onChange={(e) => setPhone(e.target.value.replace(/\D/g, '').slice(0, 10))}
-              className="w-full bg-transparent border-2 border-cream/25 px-4 py-3 font-mono text-xl text-cream placeholder:text-cream/30 focus:border-red outline-none"
-            />
-            {isDuplicatePhone && (
-              <p className="font-body text-sm text-red">
-                Already registered — {phoneLookup!.first_name || 'Member'} · {phoneLookup!.points_balance} pts.
-                This isn't a new customer.
-              </p>
+        {showSuggestions && (
+          <div className="border border-cream/15">
+            {searching && <p className="font-body text-xs text-cream/40 px-3 py-2">Searching…</p>}
+            {!searching && suggestions.length === 0 && (
+              <p className="font-body text-xs text-cream/40 px-3 py-2">No matches — add as new below.</p>
             )}
-          </>
-        ) : (
-          <>
-            <p className="font-body text-xs text-cream/40 -mb-1">
-              Prefer not to share your number? Pick a username instead.
-            </p>
-            <input
-              placeholder="Choose a username"
-              value={username}
-              onChange={(e) => {
-                setUsernameTouched(true);
-                setUsername(e.target.value.replace(/\s/g, '').toLowerCase());
-              }}
-              className="w-full bg-transparent border-2 border-cream/25 px-4 py-3 font-mono text-xl text-cream placeholder:text-cream/30 focus:border-red outline-none"
-            />
-            <UsernameStatus status={uStatus} reason={uReason} />
-            {suggestions.length > 0 && (
-              <div className="flex flex-wrap gap-2">
-                {suggestions.map((s) => (
-                  <button
-                    key={s}
-                    onClick={() => {
-                      setUsernameTouched(true);
-                      setUsername(s);
-                    }}
-                    className={`px-3 py-1 font-mono text-sm border ${
-                      username === s ? 'border-red text-cream' : 'border-cream/25 text-cream/60'
-                    }`}
-                  >
-                    {s}
-                  </button>
-                ))}
-              </div>
-            )}
-          </>
+            {suggestions.map((s) => (
+              <button
+                key={`${s.phone || ''}-${s.username || ''}`}
+                onClick={() => selectSuggestion(s)}
+                className="w-full flex justify-between items-baseline px-3 py-2 font-body text-left text-cream hover:bg-cream/10 border-t border-cream/10 first:border-t-0"
+              >
+                <span>
+                  {s.first_name || 'Member'}{' '}
+                  <span className="font-mono text-xs text-cream/50">{s.username ? `@${s.username}` : s.phone}</span>
+                </span>
+                <span className="font-mono text-xs text-cream/60">{s.points_balance} pts</span>
+              </button>
+            ))}
+          </div>
         )}
 
-        {error && <p className="font-body text-sm text-red">{error}</p>}
-        {isDuplicatePhone ? (
+        <div className="mt-2 pt-3 border-t border-cream/10 flex flex-col gap-3">
+          <p className="font-body uppercase tracking-widest text-xs text-cream/40">Not found? Add as new</p>
+          <ModeTabs mode={mode} onChange={setMode} />
+
+          <input
+            placeholder="First name"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            className="w-full bg-transparent border-2 border-cream/25 px-4 py-3 font-body text-xl text-cream placeholder:text-cream/30 focus:border-red outline-none"
+          />
+
+          {mode === 'phone' ? (
+            <>
+              <input
+                inputMode="numeric"
+                placeholder="Mobile number (10 digits)"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value.replace(/\D/g, '').slice(0, 10))}
+                className="w-full bg-transparent border-2 border-cream/25 px-4 py-3 font-mono text-xl text-cream placeholder:text-cream/30 focus:border-red outline-none"
+              />
+              {isDuplicatePhone && (
+                <p className="font-body text-sm text-red">
+                  Already registered — {phoneLookup!.first_name || 'Member'} · {phoneLookup!.points_balance} pts.
+                  Search above to find them instead.
+                </p>
+              )}
+            </>
+          ) : (
+            <>
+              <input
+                placeholder="Choose a username"
+                value={username}
+                onChange={(e) => {
+                  setUsernameTouched(true);
+                  setUsername(e.target.value.replace(/\s/g, '').toLowerCase());
+                }}
+                className="w-full bg-transparent border-2 border-cream/25 px-4 py-3 font-mono text-xl text-cream placeholder:text-cream/30 focus:border-red outline-none"
+              />
+              <UsernameStatus status={uStatus} reason={uReason} />
+              {handleSuggestions.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {handleSuggestions.map((s) => (
+                    <button
+                      key={s}
+                      onClick={() => {
+                        setUsernameTouched(true);
+                        setUsername(s);
+                      }}
+                      className={`px-3 py-1 font-mono text-sm border ${
+                        username === s ? 'border-red text-cream' : 'border-cream/25 text-cream/60'
+                      }`}
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+
+          {error && <p className="font-body text-sm text-red">{error}</p>}
           <button
-            onClick={useExisting}
-            className="w-full py-4 bg-red text-cream font-display text-2xl"
-          >
-            USE EXISTING CUSTOMER
-          </button>
-        ) : (
-          <button
-            onClick={create}
-            disabled={!ready || busy}
+            onClick={addNew}
+            disabled={!readyToAdd || busy}
             className="w-full py-4 bg-red text-cream font-display text-2xl disabled:opacity-40"
           >
-            {busy ? 'SAVING…' : 'CREATE & START ORDER'}
+            {busy ? 'SAVING…' : 'ADD & START ORDER'}
           </button>
-        )}
-      </div>
-    </div>
-  );
-}
+        </div>
 
-function ExistingCustomer({
-  onStart,
-  onAddNew,
-}: {
-  onStart: (identity: CustomerIdentity, c: CustomerLookup) => void;
-  onAddNew: (identity: CustomerIdentity) => void;
-}) {
-  const [mode, setMode] = useState<IdMode>('phone');
-  const [phone, setPhone] = useState('');
-  const [username, setUsername] = useState('');
-  const [result, setResult] = useState<CustomerLookup | null>(null);
-  const [error, setError] = useState('');
-
-  const query = mode === 'phone' ? phone : username.trim();
-  const readyToLookup = mode === 'phone' ? phone.length === 10 : query.length >= 3;
-
-  useEffect(() => {
-    setError('');
-    setResult(null);
-    if (!readyToLookup) return;
-    let cancelled = false;
-    const t = setTimeout(() => {
-      api
-        .lookup(query)
-        .then((c) => !cancelled && setResult(c))
-        .catch((e) => !cancelled && setError((e as Error).message));
-    }, mode === 'username' ? 300 : 0);
-    return () => {
-      cancelled = true;
-      clearTimeout(t);
-    };
-  }, [query, readyToLookup, mode]);
-
-  const identity: CustomerIdentity =
-    mode === 'phone' ? { phone, username: null } : { phone: null, username: username.trim() };
-
-  return (
-    <div className="flex-1 flex flex-col items-center justify-center gap-4 w-full">
-      <h1 className="font-display text-4xl text-cream">Returning customer</h1>
-      <div className="w-96 flex flex-col gap-3">
-        <ModeTabs
-          mode={mode}
-          onChange={(m) => {
-            setMode(m);
-            setResult(null);
-            setError('');
-          }}
-        />
-        {mode === 'phone' ? (
-          <input
-            autoFocus
-            inputMode="numeric"
-            placeholder="Mobile number (10 digits)"
-            value={phone}
-            onChange={(e) => setPhone(e.target.value.replace(/\D/g, '').slice(0, 10))}
-            className="w-full bg-transparent border-2 border-cream/25 px-4 py-3 font-mono text-xl text-cream placeholder:text-cream/30 focus:border-red outline-none"
-          />
-        ) : (
-          <input
-            autoFocus
-            placeholder="Username"
-            value={username}
-            onChange={(e) => setUsername(e.target.value.replace(/\s/g, '').toLowerCase())}
-            className="w-full bg-transparent border-2 border-cream/25 px-4 py-3 font-mono text-xl text-cream placeholder:text-cream/30 focus:border-red outline-none"
-          />
-        )}
-        {error && <p className="font-body text-sm text-red">{error}</p>}
-        {result && result.known && (
-          <>
-            <div className="flex justify-between items-baseline font-body text-cream">
-              <span className="font-display text-2xl">{result.first_name || 'Member'}</span>
-              <span className="font-mono text-cream/70">{result.points_balance} pts</span>
-            </div>
-            <button
-              onClick={() => onStart(identity, result)}
-              className="w-full py-4 bg-red text-cream font-display text-2xl"
-            >
-              START ORDER
-            </button>
-          </>
-        )}
-        {result && !result.known && (
-          <>
-            <p className="font-body text-sm text-cream/60">
-              No customer with that {mode === 'phone' ? 'number' : 'username'} yet.
-            </p>
-            <button
-              onClick={() => onAddNew(identity)}
-              className="w-full py-4 border-2 border-cream/30 hover:border-red text-cream font-display text-2xl"
-            >
-              ADD AS NEW
-            </button>
-          </>
-        )}
+        <button
+          onClick={() => onStart(NO_IDENTITY, null)}
+          className="font-body text-xs text-cream/40 underline underline-offset-4 self-center mt-1"
+        >
+          Walk-in — no number
+        </button>
       </div>
     </div>
   );
