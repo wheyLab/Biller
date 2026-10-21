@@ -9,15 +9,17 @@ shows up in code. Updated day to day with the `changelog` skill
 
 | PR | Title | Branch | Status | Opened | Merged | Live |
 |----|-------|--------|--------|--------|--------|------|
-| #3 (pending) | Influencer coupon, Caffenizer protein brands, wheel combo range, fixed ports | `feature/influencer-coupon-fixed-ports` | 🟡 Open · 🚀 Live | 2026-10-21 | — | 2026-10-21 |
+| [#3](https://github.com/wheyLab/Biller/pull/3) | Influencer coupon, Caffenizer protein brands, wheel combo range, fixed ports | `feature/influencer-coupon-fixed-ports` | ✅ Merged · 🚀 Live | 2026-10-21 | 2026-10-21 | 2026-10-21 |
 | [#2](https://github.com/wheyLab/Biller/pull/2) | Loyalty cap, customer search, test instance | `feature/spin-wheel-game` | ✅ Merged · 🚀 Live | 2026-10-17 | 2026-10-17 | 2026-10-17 |
 | [#1](https://github.com/wheyLab/Biller/pull/1) | Counter offers: spin the wheel, pushup and story challenges | `feature/spin-wheel-game` | ✅ Merged · 🚀 Live | 2026-10-17 | 2026-10-17 | 2026-10-17 |
 
 ---
 
-## PR #3 (pending) — Influencer coupon, Caffenizer protein brands, wheel combo range, fixed ports
+## PR #3 — Influencer coupon, Caffenizer protein brands, wheel combo range, fixed ports
 
-Branch `feature/influencer-coupon-fixed-ports` → `main` · 3 commits · live on the kiosk since 2026-10-21 (before merge).
+Merged 2026-10-21 (branch `feature/influencer-coupon-fixed-ports`). Live on the kiosk since 2026-10-21, before the merge.
+
+This changelog and its skill were pushed to the branch just after the merge, so they reach `main` through the `docs/changelog-2026-10-21` branch.
 
 ### Influencer coupon
 - New **Influencer coupon** box on the pay screen. Staff pick which drinks are free (whole drink: protein, add-ons and milk included) and enter the influencer's Instagram handle.
@@ -88,9 +90,13 @@ Merged 2026-10-17.
 Newest first. Live-kiosk work (deploys, data fixes, restarts) and anything else that isn't a code change. No customer phone numbers here.
 
 ### 2026-10-21
+- PR #3 merged on GitHub.
+- Two influencer drinks, paid for with reels, billed with the influencer coupon (backup: `backups/before-influencer-fix-108-…`):
+  - Bill **#108**, Midnight Mocha, @dhruuliciously. It had been billed as ₹177.46 cash; changed to Complimentary ₹0. The 17 loyalty points it earned were removed.
+  - Bill **#110**, Dragon Flag, @tharun._21. Added after the fact: the customer had been registered at 16:19 but no order was saved (around the kiosk restart). Complimentary ₹0, 0 points, 15 g MuscleBlaze taken from stock.
+  - Checked afterwards: loyalty balances, stock and order totals all reconcile.
 - Kiosk restarted on the PR #3 code after a full database backup (`backups/before-complimentary-migration-…`). Migration applied: 105 orders, 149 items, 100 loyalty rows unchanged, integrity OK.
 - Weekly report export moved from `Desktop\whey lab\reports` to `D:\repos\reports`. The scheduled task was repointed and a test run passed. *Pending:* delete the old Desktop folder once Excel is closed.
-- Branch `feature/influencer-coupon-fixed-ports` pushed; PR #3 to be opened on GitHub.
 - Changes made: influencer coupon, Caffenizer protein brands, wheel combo range ₹250–554.99.
 
 ### 2026-10-20
