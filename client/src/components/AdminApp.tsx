@@ -91,7 +91,7 @@ function Orders() {
             <td>{new Date(o.created_at).toLocaleString()}</td>
             <td>{o.customer_phone || (o.customer_username ? `@${o.customer_username}` : '—')}</td>
             <td>{rupees(o.total_paise)}</td>
-            <td>{o.payment_method}</td>
+            <td>{o.payment_method}{o.influencer && <span className="text-cream/50"> · @{o.influencer}</span>}</td>
             <td>+{o.points_earned}/-{o.points_redeemed}</td>
           </tr>
         ))}
@@ -211,7 +211,10 @@ function CustomerOrders({ id, onBack }: { id: number; onBack: () => void }) {
                   ))}
                 </ul>
                 <div className="mt-2 flex justify-between font-mono text-xs text-cream/40 uppercase">
-                  <span>{o.payment_method}</span>
+                  <span>
+                    {o.payment_method}
+                    {o.influencer && ` · influencer @${o.influencer}`}
+                  </span>
                   <span>
                     {o.points_earned > 0 && `+${o.points_earned}`}
                     {o.points_redeemed > 0 && ` -${o.points_redeemed}`} pts
@@ -456,7 +459,7 @@ function Stock() {
 
       <div>
         <h2 className="font-body uppercase text-xs tracking-widest text-cream/40 mb-3">
-          Brand × grams pricing (Originals &amp; Lab Blend)
+          Brand × grams pricing (Originals, Lab Blend &amp; Caffenizer)
         </h2>
         <table className="w-full max-w-2xl font-mono text-sm text-cream/80">
           <thead className="text-cream/40 text-left">

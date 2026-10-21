@@ -53,3 +53,12 @@ export function suggestUsernames(db, name, count = 4) {
 
   return results;
 }
+
+// An influencer's real Instagram handle (influencer coupon): Instagram's own
+// rules, 1-30 chars of a-z 0-9 . _, typed with or without the leading @.
+export function normalizeInstagramHandle(h) {
+  return typeof h === 'string' ? h.trim().replace(/^@/, '').toLowerCase() : '';
+}
+export function isValidInstagramHandle(h) {
+  return /^[a-z0-9._]{1,30}$/.test(h) && !h.startsWith('.') && !h.endsWith('.') && !h.includes('..');
+}

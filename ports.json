@@ -1,0 +1,8 @@
+{
+  "_note": "The only place Biller ports are defined. Fixed on purpose: no env var can change them. An instance is picked by NAME with WHEYLAB_INSTANCE (default live). See ENDPOINTS.md for every port and URL across the Whey Lab apps.",
+  "live": { "server": 4173, "client": 5173 },
+  "test": { "server": 4174, "client": 5174 },
+  "selftest": { "server": 4175 },
+  "selftest-legacy": { "server": 4176 },
+  "pushupBoard": 4180
+}

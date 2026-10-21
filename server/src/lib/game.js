@@ -8,6 +8,10 @@
 
 export const GAME_RULES = {
   originalsMinSpendPaise: 55500, // spend ₹555 (excluding the free one) → one Originals smoothie free
+  // The ₹555 combo slice only comes up for bills in this band (inclusive). Any
+  // other bill — including anything above ₹555 — never lands on it.
+  comboBillMinPaise: 25000,
+  comboBillMaxPaise: 55499,
   proteinQuizOffPaise: 3000,
   bottleFlipOffPaise: 3000,
   reactionOffPaise: 2000,
@@ -27,6 +31,13 @@ export const CHALLENGE_KEYS = [
   'reaction',
   'weightGuess',
 ];
+
+// Slices the wheel may land on for a bill of this size (cart total before
+// discounts, at the moment of the spin). The wheel still shows every slice.
+export function wheelPool(billPaise) {
+  const comboOn = billPaise >= GAME_RULES.comboBillMinPaise && billPaise <= GAME_RULES.comboBillMaxPaise;
+  return comboOn ? CHALLENGE_KEYS : CHALLENGE_KEYS.filter((k) => k !== 'originals555');
+}
 
 const fail = (error) => ({ discount_paise: 0, note: '', error });
 const subtotalOf = (lines) => lines.reduce((s, l) => s + l.unit_price_paise * l.quantity, 0);

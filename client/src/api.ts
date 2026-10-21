@@ -53,12 +53,12 @@ export interface ProteinBrand {
 export interface ProteinAmountOption {
   grams: number;
   powder_mg: number;
-  // Flat Signature-tier surcharge for this gram tier (Originals/Lab Blend use
+  // Flat Signature-tier surcharge for this gram tier (brand tiers use
   // brand_prices below instead — brand choice isn't offered on Signature).
   signature_addon_price_paise: number;
 }
 
-// One cell of the brand x grams price matrix (Originals/Lab Blend only).
+// One cell of the brand x grams price matrix (Originals/Lab Blend/Caffenizer).
 export interface ProteinBrandPrice {
   brand_id: string;
   grams: number;
@@ -79,7 +79,7 @@ export interface MilkOption {
   is_active: boolean;
 }
 
-// Which picker a tier gets: brand+grams (Originals/Lab Blend), grams-only
+// Which picker a tier gets: brand+grams (Originals/Lab Blend/Caffenizer), grams-only
 // flat surcharge (Signature), or no protein picker at all (everything else).
 export type ProteinMode = 'brand' | 'amount' | 'none';
 
@@ -175,8 +175,10 @@ export const api = {
         identity.phone ? { phone: identity.phone } : { username: identity.username || '' }
       )}`
     ),
-  spinWheel: (identity: CustomerIdentity) =>
-    req<SpinResult>('/api/game/spin', { method: 'POST', body: JSON.stringify(identity) }),
+  // billPaise = cart total before discounts; the server uses it to decide
+  // whether the ₹555 combo slice is in play.
+  spinWheel: (identity: CustomerIdentity, billPaise: number) =>
+    req<SpinResult>('/api/game/spin', { method: 'POST', body: JSON.stringify({ ...identity, bill_paise: billPaise }) }),
   // admin
   stock: () => req<any>('/api/admin/stock'),
   createStockBrand: (body: unknown) =>

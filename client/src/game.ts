@@ -7,6 +7,10 @@
 
 export const GAME_RULES = {
   originalsMinSpendPaise: 55500,
+  // The server only lands on the ₹555 combo for bills of ₹250–554.99 (see
+  // wheelPool in server/src/lib/game.js); listed here for reference.
+  comboBillMinPaise: 25000,
+  comboBillMaxPaise: 55499,
   proteinQuizOffPaise: 3000,
   bottleFlipOffPaise: 3000,
   reactionOffPaise: 2000,

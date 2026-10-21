@@ -13,6 +13,10 @@ npm run dev          # server on :4173, client (Vite) on :5173 with /api proxy
 
 Open http://127.0.0.1:5173 and fullscreen it. Back office is at
 http://127.0.0.1:5173/admin (type it — never linked from the billing screen).
+On the kiosk (no dev server) it is http://127.0.0.1:4173/admin.
+
+All ports are fixed — see [ENDPOINTS.md](ENDPOINTS.md) for every port, page
+and API route across Biller, the pushup board and the website.
 
 For a single static bundle served by Express only:
 
@@ -48,7 +52,8 @@ screens).
   to this folder (`..\pushup-challenge`). If it isn't running, the screensaver
   skips the board.
 - Overrides: `SCREENSAVER_DIR` (media folder), `SCREENSAVER_IDLE_SECONDS`
-  (default 60), `PUSHUP_BOARD_URL`, `PUSHUP_DIR` (for the launcher).
+  (default 60), `PUSHUP_DIR` (for the launcher). The board URL is fixed
+  (port 4180, `ports.json`).
 
 ## Data & backup
 

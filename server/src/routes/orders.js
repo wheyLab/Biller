@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { getDb, nextOrderNumber, allConfig } from '../lib/db.js';
 import { computeOrderTotals, splitExclusive } from '../lib/money.js';
 import { loyaltySettings, pointsEarned, canRedeem } from '../lib/loyalty.js';
-import { normalizeUsername, isValidUsername } from '../lib/username.js';
+import { normalizeUsername, isValidUsername, normalizeInstagramHandle, isValidInstagramHandle } from '../lib/username.js';
 import { GAME_RULES, computeReward, computeOffers, customerKey, istDay, pendingStoryCredit } from '../lib/game.js';
 import {
   getBrand,
@@ -19,7 +19,7 @@ const router = Router();
 const db = getDb();
 
 const isPhone = (p) => /^\d{10}$/.test(p);
-const PAYMENTS = new Set(['cash', 'upi', 'card']);
+const PAYMENTS = new Set(['cash', 'upi', 'card', 'complimentary']);
 const MAX_QTY_PER_ITEM = 99; // a fat-finger / bad-request guard, far above any real order
 const MAX_ADDONS_PER_LINE = 10; // a bad-request guard; the real menu only has 4
 
@@ -32,7 +32,7 @@ class GameRewardUsedError extends Error {}
 router.post('/', (req, res) => {
   try {
     const body = req.body || {};
-    const { items, payment_method, phone, username: rawUsername, first_name, redeem, ten_percent_off, manual_discount_paise, game, offers, story_tag, use_story_credit } = body;
+    const { items, payment_method, phone, username: rawUsername, first_name, redeem, ten_percent_off, manual_discount_paise, game, offers, story_tag, use_story_credit, influencer_handle } = body;
 
     if (!Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ error: 'Add at least one item.' });
@@ -66,13 +66,18 @@ router.post('/', (req, res) => {
       if (qty > MAX_QTY_PER_ITEM) {
         return res.status(400).json({ error: `Quantity too large (max ${MAX_QTY_PER_ITEM} per item).` });
       }
+      // Influencer coupon: how many of this line's drinks are on the house.
+      const freeQty = li.influencer_free_qty == null ? 0 : Number(li.influencer_free_qty);
+      if (!Number.isInteger(freeQty) || freeQty < 0 || freeQty > qty) {
+        return res.status(400).json({ error: 'Invalid number of free drinks.' });
+      }
       const mi = getItem.get(li.menu_item_id);
       if (!mi || !mi.is_available || mi.price_paise == null) {
         return res.status(400).json({ error: 'That item is not available.' });
       }
 
       // Protein choice depends on the item's tier — see PROTEIN_MODE_BY_TIER.
-      // 'brand': Originals & Lab Blend, customer picks brand + amount, priced
+      // 'brand': Originals, Lab Blend & Caffenizer, customer picks brand + amount, priced
       //   from the per-brand board (MuscleBlaze 20g = the listed price, ₹0 add-on).
       // 'amount': Signature — amount only, flat per-gram surcharge, no brand
       //   pick; stock is still drawn from the default brand under the hood.
@@ -155,6 +160,7 @@ router.post('/', (req, res) => {
         unit_price_paise: mi.price_paise + proteinAddonPaise + addonsPaise + (milk?.price_paise || 0),
         tier: mi.tier,
         quantity: qty,
+        free_qty: freeQty,
         addon_prices_paise: addons.map((a) => a.price_paise),
         protein_brand_id: proteinBrandId,
         protein_grams: proteinGrams,
@@ -254,10 +260,35 @@ router.post('/', (req, res) => {
       });
     }
 
+    // Influencer coupon: staff pick which drinks are free (the whole drink —
+    // protein, add-ons and milk included) and record whose coupon it was.
+    const freeDrinks = lines.reduce((n, l) => n + l.free_qty, 0);
+    let influencer = null;
+    if (freeDrinks > 0 || influencer_handle != null) {
+      const handle = normalizeInstagramHandle(influencer_handle ?? '');
+      if (!isValidInstagramHandle(handle)) return res.status(400).json({ error: 'Enter the influencer’s Instagram handle.' });
+      if (freeDrinks === 0) return res.status(400).json({ error: 'Pick at least one free drink for the influencer.' });
+      const d = lines.reduce((sum, l) => sum + l.unit_price_paise * l.free_qty, 0);
+      discountPaise += d;
+      influencer = { handle, discount_paise: d };
+      offerResult.notes.push({
+        kind: 'influencer',
+        note: `Influencer @${handle}: ${freeDrinks} ${freeDrinks === 1 ? 'drink' : 'drinks'} free`,
+        discount_paise: d,
+        ref: handle,
+      });
+    }
+
     const totals = computeOrderTotals(
       lines.map((l) => ({ unit_price_paise: l.unit_price_paise, quantity: l.quantity })),
       discountPaise
     );
+    // 'complimentary' only when there is nothing to pay, and an all-free
+    // influencer order is always recorded that way (never as ₹0 cash).
+    if (payment_method === 'complimentary' && totals.total_paise !== 0) {
+      return res.status(400).json({ error: 'Complimentary is only for orders with nothing to pay.' });
+    }
+    const paymentMethod = influencer && totals.total_paise === 0 ? 'complimentary' : payment_method;
     const earned = pointsEarned(totals.total_paise, s.earnPaisePerPoint, s.maxPointsPerOrder);
     const now = new Date().toISOString();
 
@@ -291,7 +322,7 @@ router.post('/', (req, res) => {
         )
         .run(
           orderNumber, now, customerId, totals.subtotal_paise, totals.discount_paise,
-          totals.tax_paise, totals.total_paise, payment_method, earned, pointsRedeemed
+          totals.tax_paise, totals.total_paise, paymentMethod, earned, pointsRedeemed
         ).lastInsertRowid;
 
       const insItem = db.prepare(
@@ -314,7 +345,7 @@ router.post('/', (req, res) => {
         for (const a of l.addons) {
           insAddon.run(orderItemId, a.id, a.name, a.price_paise);
         }
-        // 'none'-mode items (Clear Protein, Bulk, Caffenizer) have no brand and draw no stock.
+        // 'none'-mode items (Clear Protein, Bulk) have no brand and draw no stock.
         if (l.protein_brand_id) {
           deductForOrder(db, l.protein_brand_id, l.protein_powder_mg * l.quantity, orderId, now);
         }
@@ -356,9 +387,9 @@ router.post('/', (req, res) => {
       }
 
       const insOffer = db.prepare(
-        'INSERT INTO order_offers (order_id, kind, note, discount_paise) VALUES (?, ?, ?, ?)'
+        'INSERT INTO order_offers (order_id, kind, note, discount_paise, ref) VALUES (?, ?, ?, ?, ?)'
       );
-      for (const o of offerResult.notes) insOffer.run(orderId, o.kind, o.note, o.discount_paise);
+      for (const o of offerResult.notes) insOffer.run(orderId, o.kind, o.note, o.discount_paise, o.ref ?? null);
 
       return { orderId, orderNumber };
     });
@@ -368,6 +399,7 @@ router.post('/', (req, res) => {
       id: orderId,
       order_number: orderNumber,
       ...totals,
+      payment_method: paymentMethod,
       points_earned: earned,
       points_redeemed: pointsRedeemed,
       reward_notes: [...(gameReward ? [gameReward.note] : []), ...offerResult.notes.map((o) => o.note)],

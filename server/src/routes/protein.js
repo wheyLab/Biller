@@ -30,7 +30,7 @@ router.get('/', (_req, res) => {
     brand_prices: listBrandPrices(db),
     addons: listAddons(db, { activeOnly: true }),
     milk_options: listMilkOptions(db, { activeOnly: true }),
-    mode_by_tier: PROTEIN_MODE_BY_TIER, // e.g. { Originals: 'brand', 'Lab Blend': 'brand', Signature: 'amount' }
+    mode_by_tier: PROTEIN_MODE_BY_TIER, // e.g. { Originals: 'brand', 'Lab Blend': 'brand', Caffenizer: 'brand', Signature: 'amount' }
     default: defaultSelection(db),
   });
 });

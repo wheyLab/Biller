@@ -33,7 +33,8 @@ CREATE TABLE IF NOT EXISTS orders (
   discount_paise  INTEGER NOT NULL DEFAULT 0,
   tax_paise       INTEGER NOT NULL,        -- cgst + sgst
   total_paise     INTEGER NOT NULL,
-  payment_method  TEXT NOT NULL CHECK (payment_method IN ('cash','upi','card')),
+  -- 'complimentary' = nothing to pay (influencer coupon made every drink free).
+  payment_method  TEXT NOT NULL CHECK (payment_method IN ('cash','upi','card','complimentary')),
   points_earned   INTEGER NOT NULL DEFAULT 0,
   points_redeemed INTEGER NOT NULL DEFAULT 0
 );
@@ -175,9 +176,10 @@ CREATE INDEX IF NOT EXISTS idx_game_spins_order ON game_spins(order_id);
 CREATE TABLE IF NOT EXISTS order_offers (
   id             INTEGER PRIMARY KEY AUTOINCREMENT,
   order_id       INTEGER NOT NULL REFERENCES orders(id),
-  kind           TEXT NOT NULL,             -- 'pushups' | 'story_tag'
+  kind           TEXT NOT NULL,             -- 'pushups' | 'story_tag' | 'story_reward' | 'influencer'
   note           TEXT NOT NULL,
-  discount_paise INTEGER NOT NULL
+  discount_paise INTEGER NOT NULL,
+  ref            TEXT                       -- influencer: their Instagram handle
 );
 
 CREATE INDEX IF NOT EXISTS idx_order_offers_order ON order_offers(order_id);

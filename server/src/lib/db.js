@@ -27,6 +27,40 @@ function ensureColumn(db, table, column, ddl) {
   }
 }
 
+// The orders.payment_method CHECK predates 'complimentary' (influencer coupon,
+// nothing to pay). SQLite can't alter a CHECK, so an old orders table is
+// rebuilt once with the new constraint: same columns, same ids, every row
+// copied, all in one transaction. Child tables reference orders by name, so
+// they point at the rebuilt table without being touched.
+function allowComplimentaryPayment(db) {
+  const { sql } = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'orders'").get();
+  // Already migrated, or a very old table with no payment CHECK at all.
+  // Matched on the CHECK clause itself, not the word anywhere (a comment in the
+  // table definition can mention 'complimentary' without the rule allowing it).
+  const OLD = "IN ('cash','upi','card')";
+  const NEW = "IN ('cash','upi','card','complimentary')";
+  if (!sql.includes(OLD)) return;
+  const rebuilt = sql.replace(/^CREATE TABLE "?orders"?/, 'CREATE TABLE orders_new').replace(OLD, NEW);
+  if (!rebuilt.startsWith('CREATE TABLE orders_new') || !rebuilt.includes(NEW)) {
+    throw new Error('orders migration: table definition not recognised');
+  }
+  const before = db.prepare('SELECT COUNT(*) n FROM orders').get().n;
+  db.pragma('foreign_keys = OFF');
+  try {
+    db.transaction(() => {
+      db.exec(rebuilt);
+      db.exec('INSERT INTO orders_new SELECT * FROM orders');
+      if (db.prepare('SELECT COUNT(*) n FROM orders_new').get().n !== before) throw new Error('orders migration: row count changed');
+      db.exec('DROP TABLE orders');
+      db.exec('ALTER TABLE orders_new RENAME TO orders');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_orders_created ON orders(created_at)');
+      if (db.pragma('foreign_key_check').length) throw new Error('orders migration: foreign key check failed');
+    })();
+  } finally {
+    db.pragma('foreign_keys = ON');
+  }
+}
+
 let _db;
 export function getDb() {
   if (_db) return _db;
@@ -60,6 +94,9 @@ export function getDb() {
     'signature_addon_price_paise',
     'signature_addon_price_paise INTEGER NOT NULL DEFAULT 0'
   );
+  ensureColumn(db, 'order_offers', 'ref', 'ref TEXT');
+  allowComplimentaryPayment(db);
+
   // The 50g tier is gone (the real menu board only goes to 40g); 25g is new.
   db.exec('DELETE FROM protein_amount_options WHERE grams = 50');
 

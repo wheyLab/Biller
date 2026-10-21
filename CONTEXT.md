@@ -26,8 +26,10 @@ npm run seed     # load menu + config into the DB
 npm run dev      # server :4173, client :5173 (open http://127.0.0.1:5173)
 # prod single bundle: npm run build && npm start  -> http://127.0.0.1:4173
 ```
-Admin (never linked, type it): http://127.0.0.1:5173/admin
-DEV MUST open :5173, NOT :4173 (4173 = API + built bundle only).
+Admin (never linked, type it): http://127.0.0.1:5173/admin in dev,
+http://127.0.0.1:4173/admin on the kiosk (built bundle).
+Ports are FIXED in ports.json (no env override); pick an instance by name with
+WHEYLAB_INSTANCE=live|test. Full port + endpoint list: ENDPOINTS.md.
 
 ## Layout
 ```

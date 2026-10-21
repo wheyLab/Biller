@@ -2,6 +2,8 @@ import { Router } from 'express';
 import { readdirSync, mkdirSync, existsSync } from 'node:fs';
 import { join, extname, basename } from 'node:path';
 import { homedir } from 'node:os';
+// The pushup leaderboard is its own app/server (fixed port, ports.json); the screensaver embeds it.
+import { PUSHUP_BOARD_URL } from '../lib/ports.js';
 
 // Idle-screen playlist. Staff drop offer images and Instagram reels into one
 // folder; whatever is in it plays, sorted by file name (prefix "01-", "02-"
@@ -10,8 +12,6 @@ import { homedir } from 'node:os';
 const router = Router();
 
 export const MEDIA_DIR = process.env.SCREENSAVER_DIR || join(homedir(), 'Documents', 'Whey Lab Screensaver');
-// The pushup leaderboard is its own app/server; the screensaver embeds it.
-const PUSHUP_BOARD_URL = process.env.PUSHUP_BOARD_URL || 'http://127.0.0.1:4180/';
 const IDLE_SECONDS = Number(process.env.SCREENSAVER_IDLE_SECONDS) || 60;
 
 const IMAGE = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif']);

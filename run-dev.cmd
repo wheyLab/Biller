@@ -1,4 +1,4 @@
 @echo off
-cd /d "D:\wheylab\wheylab-biller"
+cd /d "%~dp0"
 set PATH=C:\Program Files\nodejs;%PATH%
 "C:\Program Files\nodejs\npm.cmd" run dev

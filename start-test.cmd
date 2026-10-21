@@ -9,10 +9,10 @@ setlocal
 cd /d "%~dp0"
 set "PATH=C:\Program Files\nodejs;%PATH%"
 
-rem Separate DB file, separate ports — never the production ones (4173/5173).
+rem Separate DB file; the "test" instance uses its own fixed ports from ports.json
+rem (4174/5174) — never the production ones (4173/5173).
 set "WHEYLAB_DB=%LOCALAPPDATA%\WheyLabTest\wheylab-test.sqlite"
-set "WHEYLAB_SERVER_PORT=4174"
-set "PORT=5174"
+set "WHEYLAB_INSTANCE=test"
 
 echo Test DB: %WHEYLAB_DB%
 echo Seeding it with the current menu/protein data (safe to re-run)...
