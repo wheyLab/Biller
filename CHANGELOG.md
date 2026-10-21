@@ -9,9 +9,19 @@ shows up in code. Updated day to day with the `changelog` skill
 
 | PR | Title | Branch | Status | Opened | Merged | Live |
 |----|-------|--------|--------|--------|--------|------|
+| [#4](https://github.com/wheyLab/Biller/pull/4) | Changelog: per-PR changes, daily kiosk log and changelog skill | `docs/changelog-2026-10-21` | ✅ Merged (docs only) | 2026-10-21 | 2026-10-21 | — |
 | [#3](https://github.com/wheyLab/Biller/pull/3) | Influencer coupon, Caffenizer protein brands, wheel combo range, fixed ports | `feature/influencer-coupon-fixed-ports` | ✅ Merged · 🚀 Live | 2026-10-21 | 2026-10-21 | 2026-10-21 |
 | [#2](https://github.com/wheyLab/Biller/pull/2) | Loyalty cap, customer search, test instance | `feature/spin-wheel-game` | ✅ Merged · 🚀 Live | 2026-10-17 | 2026-10-17 | 2026-10-17 |
 | [#1](https://github.com/wheyLab/Biller/pull/1) | Counter offers: spin the wheel, pushup and story challenges | `feature/spin-wheel-game` | ✅ Merged · 🚀 Live | 2026-10-17 | 2026-10-17 | 2026-10-17 |
+
+---
+
+## PR #4 — Changelog and changelog skill
+
+Merged 2026-10-21. Docs only, nothing changes on the kiosk.
+
+- Adds this `CHANGELOG.md`: PR status table, what changed in each PR, and a daily log of live-kiosk work.
+- Adds the `changelog` project skill (`.claude/skills/changelog/SKILL.md`) explaining how to update it day to day.
 
 ---
 
@@ -91,6 +101,7 @@ Newest first. Live-kiosk work (deploys, data fixes, restarts) and anything else 
 
 ### 2026-10-21
 - PR #3 merged on GitHub.
+- GitHub CLI installed and signed in (account wheyLab), so PRs can now be created and merged from here. PR #4 (this changelog) created and merged.
 - Two influencer drinks, paid for with reels, billed with the influencer coupon (backup: `backups/before-influencer-fix-108-…`):
   - Bill **#108**, Midnight Mocha, @dhruuliciously. It had been billed as ₹177.46 cash; changed to Complimentary ₹0. The 17 loyalty points it earned were removed.
   - Bill **#110**, Dragon Flag, @tharun._21. Added after the fact: the customer had been registered at 16:19 but no order was saved (around the kiosk restart). Complimentary ₹0, 0 points, 15 g MuscleBlaze taken from stock.
