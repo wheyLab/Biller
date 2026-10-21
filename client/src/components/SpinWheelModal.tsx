@@ -18,10 +18,12 @@ const TEXT_ON = (color: string) => (color === '#F3EDE4' ? '#0D0D0D' : '#F3EDE4')
 // themselves; for the rest, staff mark it won or not.
 export function SpinWheelModal({
   identity,
+  billPaise,
   onWon,
   onClose,
 }: {
   identity: CustomerIdentity;
+  billPaise: number;
   onWon: (spin: WonSpin) => void;
   onClose: () => void;
 }) {
@@ -54,7 +56,7 @@ export function SpinWheelModal({
     setError('');
     setSpinning(true);
     try {
-      const r = await api.spinWheel(identity);
+      const r = await api.spinWheel(identity, billPaise);
       if (r.already_used) throw new Error('This customer has already used today’s spin.');
       const challenge = CHALLENGES[r.slice_index];
       // Land the middle of the slice (± a little) under the pointer at the top.

@@ -1,29 +1,26 @@
 // End-to-end API tests. Each run seeds a throwaway SQLite file, starts the real
-// server on a free port against it, and drives it over HTTP — so it exercises
+// server on its fixed selftest port (ports.json) against it, and drives it over HTTP — so it exercises
 // the actual routes, SQL, transactions and seed, and never touches real data.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import net from 'node:net';
+import ports from '../../ports.json' with { type: 'json' };
+import { wheelPool } from '../src/lib/game.js';
 import Database from 'better-sqlite3';
 
 const serverDir = join(dirname(fileURLToPath(import.meta.url)), '..');
-let dir, dbFile, port, proc, base;
+let dir, dbFile, proc, base;
 
-const freePort = () =>
-  new Promise((resolve) => {
-    const s = net.createServer().listen(0, '127.0.0.1', () => {
-      const p = s.address().port;
-      s.close(() => resolve(p));
-    });
-  });
+// Fixed ports, picked by instance name like every other run of the server.
+const port = ports.selftest.server;
+const port2 = ports['selftest-legacy'].server;
 
 async function startServer(file) {
-  const env = { ...process.env, WHEYLAB_DB: file, WHEYLAB_SERVER_PORT: String(port) };
+  const env = { ...process.env, WHEYLAB_DB: file, WHEYLAB_INSTANCE: 'selftest' };
   execFileSync(process.execPath, ['src/seed.js'], { cwd: serverDir, env, stdio: 'pipe' });
   proc = spawn(process.execPath, ['src/index.js'], { cwd: serverDir, env, stdio: 'pipe' });
   for (let i = 0; i < 60; i++) {
@@ -38,7 +35,6 @@ async function startServer(file) {
 before(async () => {
   dir = mkdtempSync(join(tmpdir(), 'wl-test-'));
   dbFile = join(dir, 'test.sqlite');
-  port = await freePort();
   base = `http://127.0.0.1:${port}`;
   await startServer(dbFile);
 });
@@ -189,7 +185,7 @@ test('orders: every amount tier deducts its own powder weight, same across brand
   }
 });
 
-test('protein modes: brand choice on Originals/Lab Blend, amount-only on Signature, none elsewhere', async () => {
+test('protein modes: brand choice on Originals/Lab Blend/Caffenizer, amount-only on Signature, none elsewhere', async () => {
   // Signature: amount only, flat board price, no brand in the name, stock still drawn (from the default brand).
   const mb = await stockOf('muscleblaze');
   const sig = await order([{ menu_item_id: 'WL-21', quantity: 1, protein_grams: 30 }]); // Farmers Carry
@@ -202,8 +198,22 @@ test('protein modes: brand choice on Originals/Lab Blend, amount-only on Signatu
   assert.equal(sigWithBrand.status, 201);
   assert.equal(sigWithBrand.body.subtotal_paise, 24900); // 20g Signature surcharge is ₹0
 
-  // 'none' tiers (Clear Protein, Bulk, Caffenizer): no protein line, no stock drawn, whatever's sent is ignored.
-  for (const id of ['WL-19', 'WL-24', 'WL-26']) {
+  // Caffenizer: brand choice like Originals, so coffee drinkers can have yeast
+  // (Super You) or plant (Origin) protein. Default = MuscleBlaze 20g at the listed price.
+  const caf = await order([{ menu_item_id: 'WL-26', quantity: 1 }]); // Vanilla Latte
+  assert.equal(caf.status, 201);
+  assert.equal(caf.body.subtotal_paise, 16900);
+  assert.equal((await get(`/api/orders/${caf.body.id}/bill`)).body.items[0].name, 'Vanilla Latte — MuscleBlaze 20g');
+  for (const brand of ['superyou', 'origin']) {
+    const before = await stockOf(brand);
+    const r = await order([{ menu_item_id: 'WL-27', quantity: 2, protein_brand_id: brand, protein_grams: 20 }]); // Midnight Mocha
+    assert.equal(r.status, 201, brand);
+    assert.equal(before - (await stockOf(brand)), 2 * 15000, brand);
+    assert.match((await get(`/api/orders/${r.body.id}/bill`)).body.items[0].name, /^Midnight Mocha — (Super You|Origin) 20g$/);
+  }
+
+  // 'none' tiers (Clear Protein, Bulk): no protein line, no stock drawn, whatever's sent is ignored.
+  for (const id of ['WL-19', 'WL-24']) {
     const before = { mb: await stockOf('muscleblaze'), gnc: await stockOf('gnc') };
     const r = await order([{ menu_item_id: id, quantity: 1, protein_brand_id: 'gnc', protein_grams: 40 }]);
     assert.equal(r.status, 201, id);
@@ -316,6 +326,88 @@ test('loyalty: points cap at 20 per order; 100 pts = ₹99 off any drink, once p
   assert.equal(r.body.total_paise, net + 2 * roundHalfUp(net * 0.025));
   assert.deepEqual((await get(`/api/orders/${r.body.id}/bill`)).body.reward_notes, ['Loyalty: 100 pts redeemed']);
   assert.equal((await get(`/api/customers/${phone}`)).body.points_balance, 100 - 100 + r.body.points_earned);
+});
+
+// ------------------------------------------------------- influencer coupon
+test('influencer: every drink free → ₹0, complimentary, handle on the bill and in admin', async () => {
+  const mb = await stockOf('muscleblaze');
+  const r = await order(
+    [
+      { menu_item_id: 'WL-17', quantity: 1, influencer_free_qty: 1, addon_ids: ['chia'] },
+      { menu_item_id: 'WL-26', quantity: 1, influencer_free_qty: 1 },
+    ],
+    { influencer_handle: '@Fit.Foodie_BLR', phone: '9600000001' } // client still says cash
+  );
+  assert.equal(r.status, 201);
+  assert.equal(r.body.total_paise, 0);
+  assert.equal(r.body.tax_paise, 0);
+  assert.equal(r.body.discount_paise, r.body.subtotal_paise); // add-on is free too
+  assert.equal(r.body.payment_method, 'complimentary');
+  assert.equal(r.body.points_earned, 0);
+  assert.equal(mb - (await stockOf('muscleblaze')), 2 * 15000); // the drinks were still made
+  const bill = (await get(`/api/orders/${r.body.id}/bill`)).body;
+  assert.equal(bill.payment_method, 'complimentary');
+  assert.deepEqual(bill.reward_notes, ['Influencer @fit.foodie_blr: 2 drinks free']);
+  const listed = (await get('/api/admin/orders')).body.orders.find((o) => o.id === r.body.id);
+  assert.equal(listed.influencer, 'fit.foodie_blr');
+  assert.equal(listed.payment_method, 'complimentary');
+});
+
+test('influencer: staff pick which drinks are free; the rest is paid normally', async () => {
+  // 2 Classic Vanilla (₹99 each), one free; plus a paid latte.
+  const r = await order(
+    [
+      { menu_item_id: 'WL-17', quantity: 2, influencer_free_qty: 1 },
+      { menu_item_id: 'WL-26', quantity: 1 },
+    ],
+    { influencer_handle: 'creator', payment_method: 'upi' }
+  );
+  assert.equal(r.status, 201);
+  assert.equal(r.body.subtotal_paise, 2 * 9900 + 16900);
+  assert.equal(r.body.discount_paise, 9900);
+  assert.equal(r.body.payment_method, 'upi');
+  assert.ok(r.body.total_paise > 0);
+  assert.deepEqual(r.body.reward_notes, ['Influencer @creator: 1 drink free']);
+});
+
+test('influencer: needs a handle and at least one free drink; complimentary only at ₹0', async () => {
+  const free = [{ menu_item_id: 'WL-17', quantity: 1, influencer_free_qty: 1 }];
+  assert.equal((await order(free)).status, 400); // no handle
+  assert.equal((await order(free, { influencer_handle: 'bad handle!' })).status, 400);
+  assert.equal((await order([{ menu_item_id: 'WL-17', quantity: 1 }], { influencer_handle: 'creator' })).status, 400); // nothing free
+  assert.equal((await order([{ menu_item_id: 'WL-17', quantity: 1, influencer_free_qty: 2 }], { influencer_handle: 'creator' })).status, 400);
+  assert.equal((await order([{ menu_item_id: 'WL-17', quantity: 1 }], { payment_method: 'complimentary' })).status, 400);
+});
+
+test('migration: an orders table with the old cash/upi/card rule upgrades to allow complimentary, keeping every row', async () => {
+  const file = join(dir, 'old-check.sqlite');
+  const schema = readFileSync(join(serverDir, 'src/schema.sql'), 'utf8')
+    .replace("IN ('cash','upi','card','complimentary')", "IN ('cash','upi','card')");
+  const old = new Database(file);
+  old.exec(schema);
+  old.exec(`INSERT INTO customers (phone, first_name, created_at, points_balance) VALUES ('9700000001','Old','2026-09-01T00:00:00Z',5);
+    INSERT INTO menu_items (id,name,tier,price_paise,sort_order,is_available) VALUES ('WL-17','Classic Vanilla','Originals',9900,1,1);
+    INSERT INTO orders (order_number, created_at, customer_id, subtotal_paise, tax_paise, total_paise, payment_method, points_earned)
+      VALUES (1,'2026-09-01T00:00:00Z',1,9900,496,10396,'upi',5);
+    INSERT INTO order_items (order_id, menu_item_id, name_snapshot, unit_price_paise_snapshot, quantity) VALUES (1,'WL-17','Classic Vanilla',9900,1);
+    INSERT INTO loyalty_ledger (customer_id, order_id, delta, reason, created_at) VALUES (1,1,5,'earn','2026-09-01T00:00:00Z');`);
+  assert.throws(() => old.exec(`INSERT INTO orders (order_number, created_at, subtotal_paise, tax_paise, total_paise, payment_method)
+    VALUES (2,'x',0,0,0,'complimentary')`));
+  old.close();
+
+  // Open it the way the server does (runs the migration), then try a complimentary row.
+  execFileSync(process.execPath, ['--input-type=module', '-e',
+    "import { getDb } from './src/lib/db.js'; getDb().prepare(\"INSERT INTO orders (order_number, created_at, subtotal_paise, tax_paise, total_paise, payment_method) VALUES (2,'x',0,0,0,'complimentary')\").run();"],
+    { cwd: serverDir, env: { ...process.env, WHEYLAB_DB: file }, stdio: 'pipe' });
+
+  const db = new Database(file, { readonly: true });
+  assert.deepEqual(db.prepare('SELECT order_number, payment_method FROM orders ORDER BY id').all(),
+    [{ order_number: 1, payment_method: 'upi' }, { order_number: 2, payment_method: 'complimentary' }]);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM order_items WHERE order_id = 1').get().n, 1);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM loyalty_ledger WHERE order_id = 1').get().n, 1);
+  assert.deepEqual(db.pragma('foreign_key_check'), []);
+  assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'idx_orders_created'").get());
+  db.close();
 });
 
 test('bill: reconciles GST and 404s for unknown orders', async () => {
@@ -511,7 +603,7 @@ test('invariants: ledgers reconcile with cached balances, order numbers are gapl
     assert.equal(items.reduce((s, i) => s + i.unit_price_paise_snapshot * i.quantity, 0), o.subtotal_paise, `order ${o.order_number} subtotal`);
     assert.equal(o.subtotal_paise - o.discount_paise + o.tax_paise, o.total_paise, `order ${o.order_number} total`);
     for (const i of items) {
-      // 'none'-tier items (Clear Protein, Bulk, Caffenizer) legitimately have
+      // 'none'-tier items (Clear Protein, Bulk) legitimately have
       // no protein line at all; everything else must have one.
       if (i.protein_brand_id) {
         assert.ok(i.protein_grams && i.protein_powder_mg_snapshot > 0, `order item ${i.id}`);
@@ -605,8 +697,7 @@ test('migration: a database from before protein stock / menu-card fields upgrade
   seedDb.exec(LEGACY_SCHEMA);
   seedDb.close();
 
-  const port2 = await freePort();
-  const env = { ...process.env, WHEYLAB_DB: file, WHEYLAB_SERVER_PORT: String(port2) };
+  const env = { ...process.env, WHEYLAB_DB: file, WHEYLAB_INSTANCE: 'selftest-legacy' };
   execFileSync(process.execPath, ['src/seed.js'], { cwd: serverDir, env, stdio: 'pipe' });
   const p2 = spawn(process.execPath, ['src/index.js'], { cwd: serverDir, env, stdio: 'pipe' });
   try {
@@ -638,7 +729,7 @@ test('migration: a database from before protein stock / menu-card fields upgrade
 // ------------------------------------------------------- spin the wheel
 // Spins as a customer, then forces the slice so each reward can be tested.
 async function spinAs(phone, challengeKey) {
-  const r = await post('/api/game/spin', { phone });
+  const r = await post('/api/game/spin', { phone, bill_paise: 30000 });
   assert.equal(r.status, 200);
   const db = new Database(dbFile);
   db.prepare('UPDATE game_spins SET challenge_key = ? WHERE id = ?').run(challengeKey, r.body.spin_id);
@@ -648,16 +739,17 @@ async function spinAs(phone, challengeKey) {
 
 test('wheel: needs a customer, and re-spinning the same day returns the same slice', async () => {
   assert.equal((await post('/api/game/spin', {})).status, 400);
-  assert.equal((await post('/api/game/spin', { phone: '123' })).status, 400);
-  const a = await post('/api/game/spin', { phone: '9300000001' });
+  assert.equal((await post('/api/game/spin', { phone: '123', bill_paise: 30000 })).status, 400);
+  assert.equal((await post('/api/game/spin', { phone: '9300000002' })).status, 400); // no bill amount
+  const a = await post('/api/game/spin', { phone: '9300000001', bill_paise: 30000 });
   assert.equal(a.status, 200);
   assert.equal(a.body.already_spun, false);
   assert.ok(a.body.slice_index >= 0 && a.body.slice_index < 7);
-  const b = await post('/api/game/spin', { phone: '9300000001' });
+  const b = await post('/api/game/spin', { phone: '9300000001', bill_paise: 30000 });
   assert.equal(b.body.already_spun, true);
   assert.equal(b.body.spin_id, a.body.spin_id);
   assert.equal(b.body.challenge_key, a.body.challenge_key);
-  const u = await post('/api/game/spin', { username: 'Wheel.Fan' });
+  const u = await post('/api/game/spin', { username: 'Wheel.Fan', bill_paise: 30000 });
   assert.equal(u.status, 200);
 });
 
@@ -728,9 +820,29 @@ test('wheel: weight guess is 20% off, reaction ₹20, quiz ₹30; offers stack w
   assert.equal((await order([{ menu_item_id: 'WL-21', quantity: 1 }], { phone: '9300000009', game: { spin_id: q } })).body.discount_paise, 3000);
 });
 
+test('wheel: the ₹555 combo is only in play for ₹250–554.99 bills', async () => {
+  for (const bill of [0, 24999, 55500, 55501, 100000]) assert.ok(!wheelPool(bill).includes('originals555'), `bill ${bill}`);
+  for (const bill of [25000, 30000, 35001, 55000, 55499]) assert.ok(wheelPool(bill).includes('originals555'), `bill ${bill}`);
+  assert.equal(wheelPool(60000).length, 6);
+
+  // Through the API: 120 bills above ₹555 never land on it; 120 bills of ₹300
+  // land on it at least once (chance of never: (6/7)^120, about 1 in 100 million).
+  const keysFor = async (prefix, bill) => {
+    const keys = [];
+    for (let i = 0; i < 120; i++) {
+      const r = await post('/api/game/spin', { phone: `${prefix}${String(i).padStart(4, '0')}`, bill_paise: bill });
+      assert.equal(r.status, 200);
+      keys.push(r.body.challenge_key);
+    }
+    return keys;
+  };
+  assert.ok(!(await keysFor('940000', 60000)).includes('originals555'));
+  assert.ok((await keysFor('941000', 30000)).includes('originals555'));
+});
+
 test('wheel: an unused spin on a game since removed from the wheel gets a new slice', async () => {
   const id = await spinAs('9300000010', 'grip');
-  const again = await post('/api/game/spin', { phone: '9300000010' });
+  const again = await post('/api/game/spin', { phone: '9300000010', bill_paise: 30000 });
   assert.equal(again.body.spin_id, id);
   assert.notEqual(again.body.challenge_key, 'grip');
   assert.ok(again.body.slice_index >= 0);

@@ -3,12 +3,14 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { existsSync } from 'node:fs';
 import { getDb, dbPath } from './lib/db.js';
+import { serverPort, INSTANCE } from './lib/ports.js';
 import menu from './routes/menu.js';
 import customers from './routes/customers.js';
 import orders from './routes/orders.js';
 import admin from './routes/admin.js';
 import protein from './routes/protein.js';
 import game from './routes/game.js';
+import screensaver from './routes/screensaver.js';
 
 // A kiosk server should stay up. Without these, an uncaught error anywhere
 // (a stray socket error, a rejected promise with no .catch) crashes the whole
@@ -23,10 +25,10 @@ process.on('unhandledRejection', (reason) => {
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const HOST = '127.0.0.1'; // never bind to 0.0.0.0 — single laptop, no LAN clients
-// Dedicated var name (not the generic PORT) so nothing else on the machine —
-// another dev tool, a launcher, a shell profile — can ever redirect this by
-// accident. This app only ever runs on one fixed local port.
-const PORT = Number(process.env.WHEYLAB_SERVER_PORT) || 4173;
+// Ports are fixed in ports.json; nothing can pass a port number in. The only
+// choice is WHEYLAB_INSTANCE (live | test | selftest | selftest-legacy), which
+// picks one of those fixed entries.
+const PORT = serverPort();
 
 getDb(); // open + migrate up front so failures surface at boot
 
@@ -40,6 +42,7 @@ app.use('/api/orders', orders);
 app.use('/api/admin', admin);
 app.use('/api/protein', protein);
 app.use('/api/game', game);
+app.use('/api/screensaver', screensaver);
 
 // Serve the built client (single static bundle). In dev, Vite serves the client
 // separately and proxies /api here.
@@ -59,7 +62,17 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: 'Something went wrong.' });
 });
 
-app.listen(PORT, HOST, () => {
-  console.log(`Whey Lab billing on http://${HOST}:${PORT}`);
+const server = app.listen(PORT, HOST, () => {
+  console.log(`Whey Lab billing (${INSTANCE}) on http://${HOST}:${PORT}`);
   console.log(`DB: ${dbPath()}`);
+});
+// The port is fixed, so a clash means another copy is already running. Exit
+// loudly instead of lingering (the uncaughtException guard would otherwise
+// keep a server alive that never listens).
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`Port ${PORT} is already in use: another ${INSTANCE} server is running. Not starting a second one.`);
+    process.exit(1);
+  }
+  throw err;
 });

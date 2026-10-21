@@ -25,6 +25,21 @@ if errorlevel 1 (
   powershell -NoProfile -Command "$i=0; while (-not (Test-NetConnection 127.0.0.1 -Port 4173 -InformationLevel Quiet -WarningAction SilentlyContinue) -and $i -lt 60) { Start-Sleep 1; $i++ }"
 )
 
+rem The pushup leaderboard is a separate app that the idle screensaver shows.
+rem Started here if it sits next to this folder (override with PUSHUP_DIR).
+rem Without it, the screensaver just plays the offers and reels.
+if not defined PUSHUP_DIR set "PUSHUP_DIR=%~dp0..\pushup-challenge"
+if exist "%PUSHUP_DIR%\package.json" (
+  powershell -NoProfile -Command "if (Test-NetConnection 127.0.0.1 -Port 4180 -InformationLevel Quiet -WarningAction SilentlyContinue) { exit 0 } else { exit 1 }"
+  if errorlevel 1 (
+    echo Starting the pushup leaderboard...
+    pushd "%PUSHUP_DIR%"
+    call npm run build >nul 2>&1
+    start "Pushup server" /min cmd /c "npm start"
+    popd
+  )
+)
+
 rem A separate browser profile keeps kiosk state (and "restore tabs" prompts)
 rem out of the browser you use for everything else.
 set "PROFILE=%LOCALAPPDATA%\WheyLabKiosk"

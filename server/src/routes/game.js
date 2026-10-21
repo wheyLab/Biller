@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { randomInt } from 'node:crypto';
 import { getDb } from '../lib/db.js';
-import { CHALLENGE_KEYS, customerKey, istDay, pendingStoryCredit } from '../lib/game.js';
+import { CHALLENGE_KEYS, wheelPool, customerKey, istDay, pendingStoryCredit } from '../lib/game.js';
 import { normalizeUsername, isValidUsername } from '../lib/username.js';
 
 const router = Router();
@@ -10,9 +10,13 @@ const db = getDb();
 const isPhone = (p) => typeof p === 'string' && /^\d{10}$/.test(p);
 
 // Spin the wheel for a customer. Spinning again the same day returns the same
-// slice, so the result can't be re-rolled by spinning twice.
+// slice, so the result can't be re-rolled by spinning twice. bill_paise (the
+// cart total before discounts) decides which slices are in play; see wheelPool.
 router.post('/spin', (req, res) => {
-  const { phone, username: rawUsername } = req.body || {};
+  const { phone, username: rawUsername, bill_paise: billPaise } = req.body || {};
+  if (!Number.isInteger(billPaise) || billPaise < 0) {
+    return res.status(400).json({ error: 'Add items to the order before spinning.' });
+  }
   if (phone != null && !isPhone(phone)) {
     return res.status(400).json({ error: 'Enter a 10-digit number.' });
   }
@@ -27,8 +31,9 @@ router.post('/spin', (req, res) => {
   const day = istDay();
   let spin = db.prepare('SELECT * FROM game_spins WHERE customer_key = ? AND spin_day = ?').get(key, day);
   const alreadySpun = !!spin;
+  const pool = wheelPool(billPaise);
   if (!spin) {
-    const challengeKey = CHALLENGE_KEYS[randomInt(CHALLENGE_KEYS.length)];
+    const challengeKey = pool[randomInt(pool.length)];
     const id = db
       .prepare(
         'INSERT INTO game_spins (customer_key, spin_day, challenge_key, created_at) VALUES (?, ?, ?, ?)'
@@ -37,7 +42,7 @@ router.post('/spin', (req, res) => {
     spin = db.prepare('SELECT * FROM game_spins WHERE id = ?').get(id);
   } else if (!CHALLENGE_KEYS.includes(spin.challenge_key) && spin.order_id == null) {
     // That game was taken off the wheel since this spin; give an unused spin a new slice.
-    const challengeKey = CHALLENGE_KEYS[randomInt(CHALLENGE_KEYS.length)];
+    const challengeKey = pool[randomInt(pool.length)];
     db.prepare('UPDATE game_spins SET challenge_key = ? WHERE id = ?').run(challengeKey, spin.id);
     spin = { ...spin, challenge_key: challengeKey };
   }

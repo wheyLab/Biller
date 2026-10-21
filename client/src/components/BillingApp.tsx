@@ -7,6 +7,7 @@ import { MenuGrid } from './MenuGrid';
 import { ProteinPoster } from './ProteinPoster';
 import { TicketRail } from './TicketRail';
 import { BillModal } from './BillModal';
+import { Screensaver } from './Screensaver';
 
 // menu (full-screen, opens here) -> customer (search existing or add new) -> pay
 type Phase = 'menu' | 'customer' | 'pay';
@@ -216,6 +217,8 @@ export function BillingApp() {
           ORDER · {itemCount}
         </button>
       )}
+
+      <Screensaver enabled={!hasItems} />
     </div>
   );
 }

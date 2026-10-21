@@ -52,7 +52,8 @@ router.get('/orders', (req, res) => {
     .prepare(
       `SELECT o.id, o.order_number, o.created_at, c.phone AS customer_phone,
               c.username AS customer_username, o.total_paise,
-              o.payment_method, o.points_earned, o.points_redeemed
+              o.payment_method, o.points_earned, o.points_redeemed,
+              (SELECT ref FROM order_offers WHERE order_id = o.id AND kind = 'influencer') AS influencer
        FROM orders o LEFT JOIN customers c ON c.id = o.customer_id
        ORDER BY o.order_number DESC LIMIT ?`
     )
@@ -79,7 +80,8 @@ router.get('/customers/:id/orders', (req, res) => {
   const orders = db
     .prepare(
       `SELECT id, order_number, created_at, subtotal_paise, discount_paise, tax_paise,
-              total_paise, payment_method, points_earned, points_redeemed
+              total_paise, payment_method, points_earned, points_redeemed,
+              (SELECT ref FROM order_offers WHERE order_id = orders.id AND kind = 'influencer') AS influencer
        FROM orders WHERE customer_id = ? ORDER BY order_number DESC`
     )
     .all(id);

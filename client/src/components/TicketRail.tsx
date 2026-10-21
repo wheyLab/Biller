@@ -15,13 +15,15 @@ import type {
 import { api, rupees } from '../api';
 import type { TicketLine } from '../store/ticket';
 import { orderTotals } from '../money';
-import { pickUpiQr } from '../upi';
+import { buildUpiLink } from '../upi';
 import { UpiQrModal } from './UpiQrModal';
 import { CREATINE_EXCLUDED_TIER, CREATINE_ADDON_ID, NO_MILK_TIER, ADDON_NOTES } from '../proteinRules';
 import { CHALLENGES, GAME_RULES, computeReward, computeOffers } from '../game';
 import { SpinWheelModal, type WonSpin } from './SpinWheelModal';
 
-type Payment = 'cash' | 'upi' | 'card';
+// 'complimentary' is never picked by hand: it's sent when the influencer
+// coupon leaves nothing to pay.
+type Payment = 'cash' | 'upi' | 'card' | 'complimentary';
 const TYPE_LABEL: Record<string, string> = { whey: 'Whey', yeast: 'Yeast', plant: 'Plant-based' };
 
 // The customer is chosen before the menu (number-first flow), so this rail just
@@ -84,8 +86,6 @@ export function TicketRail({
   const addonsById = useMemo(() => new Map(addonOptions.map((a) => [a.id, a])), [addonOptions]);
   const milkById = useMemo(() => new Map(milkOptions.map((m) => [m.id, m])), [milkOptions]);
   const [payment, setPayment] = useState<Payment>('cash');
-  // Which QR code this order shows; chosen at random on first use, then kept.
-  const [upiQr, setUpiQr] = useState<ReturnType<typeof pickUpiQr> | null>(null);
   const [upiOpen, setUpiOpen] = useState(false);
   const [redeem, setRedeem] = useState(false);
   const [tenPercentOff, setTenPercentOff] = useState(false);
@@ -99,6 +99,11 @@ export function TicketRail({
   const [storyTag, setStoryTag] = useState(false);
   const [storyCredit, setStoryCredit] = useState<StoryCredit | null>(null);
   const [useStoryCredit, setUseStoryCredit] = useState(true);
+  // Influencer coupon: staff choose how many of each line are free (whole
+  // drink, extras included) and record the influencer's Instagram handle.
+  const [influencerOn, setInfluencerOn] = useState(false);
+  const [influencerHandle, setInfluencerHandle] = useState('');
+  const [freeQty, setFreeQty] = useState<Record<string, number>>({});
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -152,7 +157,20 @@ export function TicketRail({
   const storyDiscount = storyRewardOn ? Math.round((subtotal * GAME_RULES.storyNextVisitPercent) / 100) : 0;
   // A reward earned today and not yet used means nothing new can be banked.
   const storyWaiting = !!storyCredit?.pending && !storyCredit.usable_today;
-  const discount = redemptionDiscount + tenPercentDiscount + manualDiscount + gameDiscount + offersDiscount + storyDiscount;
+  const freeOf = (id: string, qty: number) => (influencerOn ? Math.min(freeQty[id] ?? 0, qty) : 0);
+  const freeDrinks = lineList.reduce((n, l) => n + freeOf(l.id, l.line.quantity), 0);
+  const influencerDiscount = lineList.reduce((s, l) => s + freeOf(l.id, l.line.quantity) * l.unitPaise, 0);
+  const handle = influencerHandle.trim().replace(/^@/, '').toLowerCase();
+  const handleOk = /^[a-z0-9._]{1,30}$/.test(handle) && !handle.startsWith('.') && !handle.endsWith('.') && !handle.includes('..');
+  const influencerError = !influencerOn
+    ? null
+    : !handleOk
+    ? 'Enter the influencer’s Instagram handle.'
+    : freeDrinks === 0
+    ? 'Pick at least one free drink.'
+    : null;
+  const discount =
+    redemptionDiscount + tenPercentDiscount + manualDiscount + gameDiscount + offersDiscount + storyDiscount + influencerDiscount;
   const identified = !!(identity.phone || identity.username);
   const hasTier = (tier: string) => lineList.some((l) => l.item?.tier === tier);
 
@@ -160,6 +178,12 @@ export function TicketRail({
   // final amount comes from. 0-value rewards (extra protein, banked story) are
   // listed too, with a word instead of an amount.
   const breakdown: { label: string; paise: number; text?: string }[] = [];
+  if (influencerDiscount > 0) {
+    breakdown.push({
+      label: `Influencer${handleOk ? ` @${handle}` : ''}: ${freeDrinks} free`,
+      paise: influencerDiscount,
+    });
+  }
   if (redemptionDiscount > 0) breakdown.push({ label: `Loyalty: ${customer!.redeem_threshold} pts redeemed`, paise: redemptionDiscount });
   if (tenPercentDiscount > 0) breakdown.push({ label: '10% off', paise: tenPercentDiscount });
   if (manualDiscount > 0) breakdown.push({ label: 'Discount', paise: manualDiscount });
@@ -184,6 +208,12 @@ export function TicketRail({
     };
   }, [stage, identified, identity.phone, identity.username]);
   const totals = orderTotals(subtotal, discount);
+  // Everything on the house: nothing to collect, recorded as complimentary.
+  const complimentary = influencerOn && freeDrinks > 0 && totals.total_paise === 0;
+  // Stable while the total doesn't change (so the QR doesn't visibly
+  // regenerate on every unrelated re-render), but recomputed the moment it
+  // does (a discount toggled, a redemption applied) — never a stale amount.
+  const upiLink = useMemo(() => buildUpiLink(totals.total_paise), [totals.total_paise]);
 
   // Undocumented manual-discount override: keyboard only, no visible button.
   useEffect(() => {
@@ -210,8 +240,10 @@ export function TicketRail({
           protein_grams: l.line.proteinGrams,
           addon_ids: l.line.addonIds,
           milk_id: l.showMilk ? l.line.milkId : undefined,
+          influencer_free_qty: freeOf(l.id, l.line.quantity) || undefined,
         })),
-        payment_method: payment,
+        payment_method: complimentary ? 'complimentary' : payment,
+        influencer_handle: influencerOn ? handle : undefined,
         phone: identity.phone || undefined,
         username: identity.username || undefined,
         redeem: redemptionDiscount > 0 || undefined,
@@ -366,6 +398,52 @@ export function TicketRail({
                 )}
               </OfferBlock>
   
+              {/* Influencer coupon: chosen drinks on the house, tracked by handle. */}
+              <OfferBlock title="Influencer coupon">
+                <label className="flex items-center gap-2 font-body text-sm text-cream cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={influencerOn}
+                    onChange={(e) => {
+                      setInfluencerOn(e.target.checked);
+                      // Start with every drink free; staff untick a paying friend's.
+                      if (e.target.checked) setFreeQty(Object.fromEntries(lineList.map((l) => [l.id, l.line.quantity])));
+                    }}
+                  />
+                  Drinks on the house
+                </label>
+                {influencerOn && (
+                  <div className="mt-1 flex flex-col gap-2">
+                    <input
+                      autoFocus
+                      value={influencerHandle}
+                      onChange={(e) => setInfluencerHandle(e.target.value.replace(/\s/g, '').slice(0, 31))}
+                      placeholder="@instagram_handle"
+                      className="w-full bg-transparent border-2 border-cream/25 px-2 py-1 font-display text-xl text-cream outline-none focus:border-red"
+                    />
+                    <ul className="flex flex-col gap-1">
+                      {lineList.map((l) => {
+                        const n = freeOf(l.id, l.line.quantity);
+                        const set = (v: number) =>
+                          setFreeQty((f) => ({ ...f, [l.id]: Math.max(0, Math.min(v, l.line.quantity)) }));
+                        return (
+                          <li key={l.id} className="flex items-center gap-2 font-body text-sm text-cream">
+                            <span className="flex-1 min-w-0 truncate">{l.item.name}</span>
+                            <span className="text-xs text-cream/50">free</span>
+                            <button onClick={() => set(n - 1)} className="w-7 h-7 border border-cream/30">−</button>
+                            <span className="w-10 text-center font-mono">
+                              {n}/{l.line.quantity}
+                            </span>
+                            <button onClick={() => set(n + 1)} className="w-7 h-7 border border-cream/30">+</button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                    {influencerError && <p className="font-body text-sm text-cream/70">{influencerError}</p>}
+                  </div>
+                )}
+              </OfferBlock>
+
               {/* 3. Story: confirmed today → 10% off their next visit (a later day). */}
               <OfferBlock title="Story challenge">
                 {!identified ? (
@@ -447,14 +525,19 @@ export function TicketRail({
           </>
         )}
 
-        {stage === 'pay' && (<div className="grid grid-cols-3 gap-2">
-          {(['cash', 'upi', 'card'] as Payment[]).map((m) => (
+        {stage === 'pay' && complimentary && (
+          <div className="py-2 text-center font-body uppercase text-sm border-2 border-red text-cream">
+            Complimentary — nothing to pay
+          </div>
+        )}
+
+        {stage === 'pay' && !complimentary && (<div className="grid grid-cols-3 gap-2">
+          {(['cash', 'upi', 'card'] as const).map((m) => (
             <button
               key={m}
               onClick={() => {
                 setPayment(m);
                 if (m === 'upi' && lineList.length > 0) {
-                  setUpiQr((q) => q ?? pickUpiQr());
                   setUpiOpen(true);
                 }
               }}
@@ -470,7 +553,7 @@ export function TicketRail({
         {stage === 'pay' && (
           <button
             onClick={complete}
-            disabled={busy || lineList.length === 0 || !!gameReward?.error || !!offers.error}
+            disabled={busy || lineList.length === 0 || !!gameReward?.error || !!offers.error || !!influencerError}
             className="w-full py-4 bg-red text-cream font-display text-2xl tracking-wide disabled:opacity-40"
           >
             {busy ? 'SAVING…' : 'COMPLETE ORDER'}
@@ -480,6 +563,7 @@ export function TicketRail({
       {wheelOpen && (
         <SpinWheelModal
           identity={identity}
+          billPaise={subtotal}
           onClose={() => setWheelOpen(false)}
           onWon={(spin) => {
             setWonSpin(spin);
@@ -487,15 +571,15 @@ export function TicketRail({
           }}
         />
       )}
-      {upiOpen && upiQr && (
-        <UpiQrModal src={upiQr.src} amount={rupees(totals.total_paise)} onClose={() => setUpiOpen(false)} />
+      {upiOpen && (
+        <UpiQrModal link={upiLink} amount={rupees(totals.total_paise)} onClose={() => setUpiOpen(false)} />
       )}
     </aside>
   );
 }
 
 // One collapsible panel per ticket line covering everything that can be
-// customised for it: brand+grams (Originals/Lab Blend), grams-only
+// customised for it: brand+grams (Originals/Lab Blend/Caffenizer), grams-only
 // (Signature), add-ons (everywhere, creatine excluded on Bulk), and milk
 // (everywhere except Clear Protein). Collapsed by default, showing the
 // current choice as one summary line; tap to expand and change it.

@@ -13,6 +13,10 @@ npm run dev          # server on :4173, client (Vite) on :5173 with /api proxy
 
 Open http://127.0.0.1:5173 and fullscreen it. Back office is at
 http://127.0.0.1:5173/admin (type it — never linked from the billing screen).
+On the kiosk (no dev server) it is http://127.0.0.1:4173/admin.
+
+All ports are fixed — see [ENDPOINTS.md](ENDPOINTS.md) for every port, page
+and API route across Biller, the pushup board and the website.
 
 For a single static bundle served by Express only:
 
@@ -30,6 +34,26 @@ shortcut to the file in `shell:startup` to launch it when the laptop boots.
 
 The menu is drawn on a fixed 1920-wide canvas and scaled to whatever screen it
 runs on, so it looks the same everywhere and never reflows when the cart opens.
+
+## Screensaver (offers, reels, pushup board)
+
+After **1 minute** with nobody touching the menu and **an empty cart**, the
+screen plays a loop: pushup board → offer → pushup board → reel → … A tap
+anywhere (or any key) goes straight back to the menu; that tap never orders
+anything. It never starts mid-order (cart has items, or on the customer/pay
+screens).
+
+- Put offer images (`.jpg .png .webp .gif`) and reels (`.mp4 .webm .mov`) in
+  **Documents\Whey Lab Screensaver**. They play in file-name order, so name
+  them `01-…`, `02-…` to set the order. Add or remove files any time; the
+  next loop picks them up. Images show 8 s; reels play to the end, muted.
+- The pushup board comes from the separate pushup-challenge app
+  (http://127.0.0.1:4180). `start-kiosk.cmd` starts it if that app sits next
+  to this folder (`..\pushup-challenge`). If it isn't running, the screensaver
+  skips the board.
+- Overrides: `SCREENSAVER_DIR` (media folder), `SCREENSAVER_IDLE_SECONDS`
+  (default 60), `PUSHUP_DIR` (for the launcher). The board URL is fixed
+  (port 4180, `ports.json`).
 
 ## Data & backup
 

@@ -4,12 +4,13 @@
 // counters pattern.
 import { getConfig } from './db.js';
 
-// Per the shop's "Blend Your Protein" board: brand choice is only offered on
-// Originals and Lab Blend. Signature gets a protein amount but no brand pick
-// (a flat per-gram surcharge instead — protein_amount_options.signature_addon_price_paise).
-// Every other tier (Clear Protein, Bulk, Caffenizer) has no protein picker at
-// all — its price and recipe are fixed as listed.
-export const PROTEIN_MODE_BY_TIER = { Originals: 'brand', 'Lab Blend': 'brand', Signature: 'amount' };
+// Per the shop's "Blend Your Protein" board: brand choice is offered on
+// Originals, Lab Blend and Caffenizer (so coffee drinkers can pick yeast or
+// plant protein). Signature gets a protein amount but no brand pick (a flat
+// per-gram surcharge instead — protein_amount_options.signature_addon_price_paise).
+// Every other tier (Clear Protein, Bulk) has no protein picker at all — its
+// price and recipe are fixed as listed.
+export const PROTEIN_MODE_BY_TIER = { Originals: 'brand', 'Lab Blend': 'brand', Caffenizer: 'brand', Signature: 'amount' };
 export function proteinModeForTier(tier) {
   return PROTEIN_MODE_BY_TIER[tier] || 'none';
 }
