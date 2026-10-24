@@ -1,7 +1,7 @@
-// The shop's AU Bank merchant UPI ID. Every QR is generated fresh per order
+// The shop's Paytm merchant UPI ID. Every QR is generated fresh per order
 // with the exact amount baked in (no static, reusable image) — see
 // UpiQrModal, which turns the link this builds into an actual QR code.
-const MERCHANT_VPA = 'wheylab041026@aubiz';
+const MERCHANT_VPA = 'paytm.s2wyeti@pty';
 const MERCHANT_NAME = 'Whey Lab';
 
 // paise -> the plain "123.45" string UPI's `am` param expects (never a
